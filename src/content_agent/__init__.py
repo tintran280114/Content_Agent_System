@@ -1,8 +1,5 @@
-"""Content Agent System package.
+"""CLI-first social content agent system."""
 
-The AI modules are intentionally independent from the platform/orchestrator so
-they can be merged into the shared repository without taking over ownership of
-the CLI, database, or policy parser.
-"""
+__version__ = "0.1.0"
 
-__all__ = ["ai"]
+__all__ = ["ai", "orchestrator", "platform", "policy"]

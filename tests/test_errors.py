@@ -14,6 +14,10 @@ class FakeHttpError(Exception):
         self.body = body or {}
 
 
+class ConnectError(Exception):
+    pass
+
+
 class ErrorTests(unittest.TestCase):
     def test_rate_limit_is_retryable_and_safe(self) -> None:
         error = normalize_provider_exception(
@@ -31,6 +35,17 @@ class ErrorTests(unittest.TestCase):
         )
         self.assertEqual(error.code, ErrorCode.PERMISSION_DENIED)
         self.assertFalse(error.retryable)
+
+    def test_connection_class_is_normalized_without_unsafe_details(self) -> None:
+        error = normalize_provider_exception(
+            ConnectError("upstream detail must stay private"),
+            provider="gemini",
+            model="model",
+        )
+        self.assertEqual(error.code, ErrorCode.NETWORK)
+        self.assertTrue(error.retryable)
+        self.assertEqual(str(error), "Could not connect to provider.")
+        self.assertNotIn("upstream", str(error))
 
     def test_error_dict_has_handoff_fields(self) -> None:
         error = ProviderError(

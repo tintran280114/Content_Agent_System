@@ -14,11 +14,15 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Build outputs
 build/
 dist/
 *.egg-info/
+.eggs/
 
 # Runtime artifacts
 artifacts/
@@ -30,5 +34,8 @@ logs/
 # IDE and operating system
 .vscode/
 .idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
+Desktop.ini

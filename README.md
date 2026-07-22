@@ -1,92 +1,62 @@
-# AI-01 Provider Spike — Day 1 (Trọng)
+# Social Content Agent System — Day 1 MVP
 
-This folder is a merge-safe overlay for the `Content_Agent_System` repository.
-It implements Trọng's Day 1 deliverable without taking over Tín's repository,
-CLI, database, logging, or CI ownership.
+This repository implements the complete Monday/G1 vertical slice from the
+Wednesday MVP sprint plan:
 
-## Day 1 goal
+```text
+Markdown AccountPolicy -> Gemini Research -> Groq Copywriter -> SQLite
+```
 
-Prove that the three free-tier providers can return validated structured JSON,
-freeze a provider adapter contract, propose the Research/Copywriter/Critic model
-routes, and hand a stable error taxonomy to Tín.
+One CLI invocation loads a validated account policy, creates one `run_id`,
+executes both structured AI agents, and persists the `AccountPolicy`,
+`ResearchBrief`, `DraftPost`, and ordered `RunEvent` records in one database.
 
-## What is included
+## Day 1 scope
 
-- Pydantic contracts for `ResearchBrief`, `DraftPost`, and `CriticResult`.
-- A provider-independent adapter interface.
-- Gemini, Groq, and GitHub Models SDK-backed adapters.
-- Primary/fallback model registry.
-- A live spike command that never logs API keys.
-- Offline unit tests for schemas, error normalization, and fallback routing.
-- The provider decision record and team handoff checklist.
+- **AI-01 (Trọng):** strict AI schemas, Gemini/Groq/GitHub Models adapters,
+  provider routing, versioned prompts, normalized provider errors, and live
+  provider-spike tooling.
+- **PLT-01 (Tín):** repository skeleton, CLI, frozen run/event contracts,
+  orchestrator, SQLite schema, traceable failures, dependency entry point, and
+  minimal CI.
+- **POL-01 (Tài):** Policy Spec v0.1, Markdown parser with actionable errors,
+  template, three differentiated account policies, and valid/invalid fixtures.
 
-## Merge order
+Day 2 critic/rewrite/human-review/Publisher work and Day 3 evaluation/release
+work are intentionally outside this branch's Day 1 boundary.
 
-1. Wait until Tín pushes the repository bootstrap to `main`.
-2. Pull `main` and create Trọng's branch:
+## Architecture
 
-   ```powershell
-   git switch main
-   git pull origin main
-   git switch -c feature/ai-01-provider-spike
-   ```
+```text
+accounts/<slug>.md
+        |
+        v
+  AccountPolicy parser/validation
+        |
+        v
+  Day1Orchestrator ---------> SQLite runs + policies + artifacts + run_events
+        |                                      ^
+        +--> Gemini ResearchBrief -------------+
+        |                                      |
+        +--> Groq DraftPost --------------------+
+```
 
-3. Copy the contents of this overlay into the repository root. If Tín chose a
-   package name other than `content_agent`, keep Tín's name and move the files
-   under that package instead.
-4. Add `pydantic>=2.8,<3` to Tín's `pyproject.toml`. Do not replace Tín's file
-   with a second project configuration.
+The provider adapters never receive credentials in prompts. Shareable files
+contain blank environment-variable values only, and normalized provider errors
+exclude request headers and API keys.
 
-## Team setup and credential ownership
+## Quick start (Windows, under 10 minutes)
 
-Every teammate must use their **own** free-tier credentials for live testing.
-Do not copy Trọng's `.env`, reuse another member's token, or send a credential
-through chat, email, screenshots, issues, pull requests, logs, or artifacts.
-Offline tests do not require any credentials.
-
-Create the credentials below before running the live checks:
-
-| Role | Credential to create | Primary model | Required access |
-|---|---|---|---|
-| Research | [Gemini API key in Google AI Studio](https://aistudio.google.com/apikey) | `gemini-3.1-flash-lite` | Use a Gemini Developer API free-tier project |
-| Copywriter | [Groq API key](https://console.groq.com/keys) | `llama-3.3-70b-versatile` | Use the Groq Free Plan and confirm the model on the account Limits page |
-| Critic | [GitHub fine-grained PAT](https://github.com/settings/personal-access-tokens/new) | `openai/gpt-4o-mini` | Set **Account permissions → Models → Read-only**; repository permission is not required for direct inference |
-
-Pinned fallbacks are `gemini-3.5-flash`, `qwen/qwen3.6-27b`, and
-`openai/gpt-4.1-mini`. Do not test fallbacks during normal verification because
-that consumes extra requests. The Groq primary is scheduled to shut down for
-free/developer tiers on 16 August 2026, so the Qwen fallback is the planned
-post-sprint replacement.
-
-Use free-tier accounts/projects and do not select Groq Flex, paid Gemini
-features, Gemini Search grounding, or paid GitHub Models usage for this Day 1
-test. Provider billing settings are controlled in each teammate's account, not
-by the API token itself.
-
-## Local setup on Windows
-
-Run these commands from the repository root.
-
-PowerShell:
+From the repository root:
 
 ```powershell
-py -3.12 -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-ai.txt
-Copy-Item .env.ai.example .env
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
-Command Prompt (`cmd.exe`):
-
-```cmd
-py -3.12 -m venv .venv
-.venv\Scripts\activate.bat
-python -m pip install -r requirements-ai.txt
-copy .env.ai.example .env
-```
-
-Open `.env` locally and fill in the three credentials. Keep these exact model
-IDs unless the provider matrix is deliberately updated:
+Fill in `.env` locally:
 
 ```dotenv
 GEMINI_API_KEY=<your-own-gemini-key>
@@ -95,176 +65,145 @@ GEMINI_MODEL=gemini-3.1-flash-lite
 GROQ_API_KEY=<your-own-groq-key>
 GROQ_MODEL=llama-3.3-70b-versatile
 
-GITHUB_MODELS_TOKEN=<your-own-fine-grained-github-pat>
+GITHUB_MODELS_TOKEN=<your-own-github-models-token>
 GITHUB_MODELS_MODEL=openai/gpt-4o-mini
 ```
 
-Never commit `.env`. The repository tracks only `.env.ai.example`, whose
-credential values are blank.
+Never commit `.env`, paste keys into prompts, or include them in screenshots,
+logs, issues, pull requests, or artifacts.
 
-## Day 1 verification for Tín and Tài
+## Verify without spending provider quota
 
-Run the checks in this order from the activated virtual environment.
-
-### `provider_spike.py` test command reference
-
-Use this single script for every provider connectivity and structured-output
-check:
-
-| Test purpose | Command | API requests | Artifact |
-|---|---|---:|---|
-| Inspect configured routes only | `python scripts/provider_spike.py --dry-run` | 0 | `artifacts/provider_spike_results.json` |
-| Quick GitHub connection/JSON smoke | `python scripts/provider_spike.py --provider github_models --smoke` | 1 GitHub | `artifacts/github_models_smoke.json` |
-| Formal Gemini Research contract | `python scripts/provider_spike.py --provider gemini` | 1 Gemini | `artifacts/provider_spike_results.json` |
-| Formal Groq Copywriter contract | `python scripts/provider_spike.py --provider groq` | 1 Groq | `artifacts/provider_spike_results.json` |
-| Formal GitHub Critic contract | `python scripts/provider_spike.py --provider github_models` | 1 GitHub | `artifacts/provider_spike_results.json` |
-| Full Day 1 provider evidence | `python scripts/provider_spike.py --provider all` | 3 total | `artifacts/provider_spike_results.json` |
-| Primary and fallback validation | `python scripts/provider_spike.py --provider all --include-fallbacks` | 6 total | `artifacts/provider_spike_results.json` |
-
-Use `--output <path>` when you need to preserve an earlier artifact, for
-example:
-
-```cmd
-python scripts/provider_spike.py --provider gemini --output artifacts/gemini_check.json
-```
-
-Recommended order for normal review:
-
-```cmd
+```powershell
+python run.py --help
+python run.py --list-accounts
 python scripts/provider_spike.py --dry-run
-python scripts/provider_spike.py --provider github_models --smoke
-python scripts/provider_spike.py --provider all
-```
-
-The `--smoke` flag must be used with `--provider github_models`; it cannot be
-combined with `--dry-run` or `--include-fallbacks`.
-
-### 1. Inspect routes without spending quota
-
-```cmd
-python scripts/provider_spike.py --dry-run
-```
-
-Expected: Research, Copywriter, and Critic routes show `configured` with the
-three primary model IDs above.
-
-### 2. Run the offline contract and security suite
-
-```cmd
 python -m unittest discover -s tests -v
 ```
 
-Expected final lines:
+Expected account list:
 
 ```text
-Ran 20 tests
-OK
+community-learning      Facebook    max_length=1200
+responsible-ai-lab      LinkedIn    max_length=900
+startup-growth          X           max_length=280
 ```
 
-These tests validate the ResearchBrief, DraftPost, CriticResult, valid/invalid
-fixtures, policy conditioning, provider separation, usage metadata, safe error
-normalization, malformed JSON handling, and the no-secret rule. They consume no
-provider quota.
+The offline suite covers policy validation, AI handoffs, provider separation,
+structured responses, error normalization, SQLite persistence, one-run
+traceability, CLI behavior, rate-limit failure state, and secret scanning.
 
-### 3. Validate all three live providers
+## Run the integrated Day 1 vertical slice
 
-```cmd
+This uses one Gemini request and one Groq request:
+
+```powershell
+python run.py --account responsible-ai-lab `
+  --topic "How small teams can use AI responsibly for social content"
+```
+
+An account slug resolves to `accounts/<slug>.md`. An explicit policy path also
+works:
+
+```powershell
+python run.py --account accounts/startup-growth.md `
+  --topic "A practical weekly growth experiment"
+```
+
+Success output contains the shared `run_id`, linked research/draft IDs, and the
+database path. The default database is `artifacts/day1.sqlite3` and is ignored
+by Git. Missing policies exit with code 2; safe provider/pipeline failures exit
+with code 3 and persist the failed state under the printed `run_id`.
+
+## Inspect a run in SQLite
+
+The G1 evidence is stored in four tables:
+
+- `runs`: account, topic, terminal state, and safe failure fields;
+- `policies`: source file, Policy Spec version, and parsed policy JSON;
+- `artifacts`: `account_policy`, `research_brief`, and `draft_post` JSON;
+- `run_events`: ordered step/state/attempt, provider/model, token/cost, and
+  normalized error metadata.
+
+Use any SQLite viewer, or run this read-only Python command after replacing the
+ID:
+
+```powershell
+python -c "import sqlite3; db=sqlite3.connect('artifacts/day1.sqlite3'); db.row_factory=sqlite3.Row; print(dict(db.execute('select * from runs where run_id=?', ('<run_id>',)).fetchone()))"
+```
+
+The consumer invariant is
+`DraftPost.brief_id == ResearchBrief.brief_id`, and all policy, artifact, and
+event rows reference that same `run_id`.
+
+## Add account 4 without changing Python
+
+```powershell
+Copy-Item accounts/template.md accounts/account-4.md
+```
+
+Edit only the new Markdown file, then validate it:
+
+```powershell
+python run.py --list-accounts
+python run.py --account account-4 --topic "Your topic"
+```
+
+The exact syntax, required sections, and validation rules are in
+[`docs/policy_spec.md`](docs/policy_spec.md).
+
+## Provider validation
+
+| Role | Provider | Primary model | Credential |
+|---|---|---|---|
+| Research | Gemini | `gemini-3.1-flash-lite` | `GEMINI_API_KEY` |
+| Copywriter | Groq | `llama-3.3-70b-versatile` | `GROQ_API_KEY` |
+| Critic contract probe | GitHub Models | `openai/gpt-4o-mini` | `GITHUB_MODELS_TOKEN` |
+
+Run one schema-valid request per primary provider:
+
+```powershell
 python scripts/provider_spike.py --provider all
 ```
 
-Expected status table:
+Run the direct Gemini-to-Groq AI handoff without platform persistence:
 
-```text
-research     gemini           primary      passed       gemini-3.1-flash-lite
-copywriter   groq             primary      passed       llama-3.3-70b-versatile
-critic       github_models    primary      passed       openai/gpt-4o-mini
-```
-
-This consumes one request per primary provider. It writes
-`artifacts/provider_spike_results.json`; each response is counted as passed only
-after local Pydantic validation.
-
-Optional: when diagnosing only the GitHub Models credential/model, use the
-lightweight smoke mode in the same `provider_spike.py` command instead of
-spending quota on all three providers:
-
-```cmd
-python scripts/provider_spike.py --provider github_models --smoke
-```
-
-It checks that GitHub Models returns valid JSON with `caption`, `hashtags`, and
-`cta`, then writes `artifacts/github_models_smoke.json`. This is a connection
-diagnostic inside the formal provider-spike tool; the normal Critic contract is
-still validated by `--provider all`.
-
-### 4. Validate the integrated Research → Copywriter handoff
-
-```cmd
+```powershell
 python scripts/ai_day1_demo.py
 ```
 
-Expected summary:
+Provider artifacts are written under `artifacts/` and must never include a
+credential. Free-tier quotas and model catalogs are not SLAs; use
+`docs/ai/provider_matrix.md` for the pinned fallback decisions.
+
+## Project layout
 
 ```text
-Account: responsible-ai-lab
-Research: gemini/gemini-3.1-flash-lite
-Copywriter: groq/llama-3.3-70b-versatile
-Draft: ...
+.github/workflows/ci.yml       minimal push/PR/manual CI
+accounts/                      template + three Markdown policies
+docs/                          Policy, platform, AI, and G1 handoff docs
+pyproject.toml                 installable package metadata and tool config
+run.py                         integrated Day 1 CLI
+scripts/                       live provider and AI handoff checks
+src/content_agent/ai/          contracts, prompts, agents, providers, routing
+src/content_agent/platform/    RunEvent contract and SQLite store
+src/content_agent/policy.py    AccountPolicy and Markdown parser
+src/content_agent/orchestrator.py
+tests/                         offline contract/unit/integration/security tests
 ```
 
-This consumes one Gemini and one Groq request. It writes
-`artifacts/ai_day1_demo.json` and proves that the Groq draft references the
-exact Gemini research object through `brief_id`.
+## Day 1 Definition of Done
 
-### 5. Owner-specific sign-off
+- Three differentiated policies and the template parse through one strict
+  Markdown contract; invalid input names the file and section.
+- Research and Copywriter consume the parsed `AccountPolicy` and return strict,
+  linked schemas with provider/model/prompt/usage metadata.
+- A single CLI run persists policy, research, draft, and events under one
+  `run_id`; the success and provider-failure paths are tested.
+- `python run.py --help`, account validation, the test suite, and minimal CI
+  pass without credentials.
+- `.env` and runtime databases/artifacts are ignored; the security test finds
+  no provider credential in shareable files.
 
-- **Tín:** confirm `run_research_copywriter()` is callable by the orchestrator,
-  `DraftPost.brief_id` matches `ResearchBrief.brief_id`, and
-  `ProviderError.as_dict()` fits the planned `RunEvent` error fields.
-- **Tài:** confirm `PolicyContext.from_policy()` accepts the real
-  `AccountPolicy`, the generated draft reflects its goal/tone/constraints, and
-  the shared `CriticResult` fields fit Policy Spec v0.1.
-- **Both:** confirm no credential appears in `git status`, the PR diff, terminal
-  output, or either runtime artifact.
-
-Do not run the following command during routine verification; it consumes
-additional free-tier requests and is only for an explicit fallback check:
-
-```cmd
-python scripts/provider_spike.py --provider all --include-fallbacks
-```
-
-Common failures:
-
-- `missing_credential`: the matching key/token is absent from `.env`.
-- `authentication`: the credential is invalid or expired.
-- GitHub `permission_denied`: recreate/edit the fine-grained PAT with
-  **Models: Read-only**.
-- `unavailable_model`: verify the exact provider-prefixed model ID.
-- `rate_limit`: wait for the free-tier limit to reset; do not switch to paid
-  usage solely to pass this spike.
-
-## Commit and open the PR
-
-```powershell
-git add src/content_agent/ai scripts/provider_spike.py scripts/ai_day1_demo.py `
-  tests docs/ai requirements-ai.txt .env.ai.example .gitignore README.md
-git commit -m "feat(ai): add provider spike and structured contracts"
-git push -u origin feature/ai-01-provider-spike
-```
-
-PR title: `AI-01: Provider spike, structured contracts, and model routing`
-
-Before requesting review, paste the actual pass/fail table from
-`artifacts/provider_spike_results.json` into the PR description. Do not commit
-that runtime artifact unless the team explicitly wants test evidence versioned.
-
-## Definition of done
-
-- Gemini, Groq, and GitHub Models each return schema-valid JSON at least once.
-- The chosen primary/fallback routes are documented.
-- Missing credentials, auth, quota, timeout, provider, model, content, and
-  schema failures have normalized codes.
-- Tín confirms the error fields fit `RunEvent`.
-- Tài confirms the shared `CriticResult` fields fit Policy Spec v0.1.
-- Offline tests pass and no secret is present in the diff.
+See `docs/day1_g1_evidence.md` for the cross-owner evidence matrix and
+`docs/platform/day1_contracts.md` for the frozen database/event contract.

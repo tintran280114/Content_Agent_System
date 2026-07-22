@@ -1,88 +1,42 @@
-# AI-01 Day 1 handoff
+# AI-01 Day 1 integrated handoff
 
-## Ownership boundary
+Trọng's structured AI interfaces are consumed by `Day1Orchestrator` without an
+adapter shim. Tài's canonical `AccountPolicy` is normalized by
+`PolicyContext.from_policy()` for prompt construction, while Tín's platform
+persists the complete policy object.
 
-This branch owns provider adapters, AI contracts, versioned prompts, Research,
-Copywriter, the Critic schema/probe, provider evidence, and AI-specific tests.
-It deliberately does not own `run.py`, SQLite, orchestration state, the Markdown
-policy parser, CI, or publishing.
-
-Tài remains the owner of `AccountPolicy`. The AI layer accepts Tài's Pydantic
-object directly through `PolicyContext.from_policy()`. The minimum consumed
-fields are `account_id` (or `slug`/`name`), `goal`, `constraints`, `examples`,
-`rubric`, and `threshold`; audience, platform, tone, language, banned terms,
-required hashtags, and maximum length are supported when present.
-
-## Interfaces for Tín
+The integrated call order is:
 
 ```python
-from content_agent.ai import CopywriterAgent, ResearchAgent
-from content_agent.ai.config import Role
-from content_agent.ai.registry import create_role_provider
-
-research_agent = ResearchAgent(create_role_provider(Role.RESEARCH))
-copywriter_agent = CopywriterAgent(create_role_provider(Role.COPYWRITER))
-
-brief = research_agent.run(topic=topic, policy=account_policy)
-draft = copywriter_agent.run(research=brief, policy=account_policy)
-```
-
-Or use the atomic handoff helper:
-
-```python
-from content_agent.ai import run_research_copywriter
-from content_agent.ai.config import Role
-from content_agent.ai.registry import create_role_provider
-
-result = run_research_copywriter(
+policy = load_policy(policy_path)
+brief = ResearchAgent(create_role_provider(Role.RESEARCH)).run(
     topic=topic,
-    policy=account_policy,
-    research_provider=create_role_provider(Role.RESEARCH),
-    copywriter_provider=create_role_provider(Role.COPYWRITER),
+    policy=policy,
+)
+draft = CopywriterAgent(create_role_provider(Role.COPYWRITER)).run(
+    research=brief,
+    policy=policy,
 )
 ```
 
-`result.research` and `result.draft` are strict Pydantic models. Persist them
-with `model_dump(mode="json")`. Each contains provider, model, role, prompt
-version, SDK version, request ID when available, latency, and token usage.
+`ResearchBrief` and `DraftPost` contain provider, model, role, prompt version,
+SDK version, request ID when available, latency, and token usage. The platform
+persists them as `research_brief` and `draft_post`; it asserts
+`DraftPost.brief_id == ResearchBrief.brief_id`.
 
-## Fixtures and expected consumer tests
+All provider failures become `ProviderError` with stable `code`, `message`,
+`provider`, `model`, `retryable`, and `status_code` fields. The orchestrator
+stores those fields in a failed `RunEvent` and never records provider exception
+bodies or request headers.
 
-Valid and invalid fixtures live in `tests/fixtures/` for:
-
-- `PolicyContext` compatibility input;
-- `ResearchBrief`;
-- `DraftPost`;
-- `CriticResult`.
-
-Tín's integration test should pass Tài's real `AccountPolicy` to
-`ResearchAgent.run`, persist the returned `ResearchBrief`, pass that exact
-object to `CopywriterAgent.run`, and assert that both records share the account
-and that `DraftPost.brief_id == ResearchBrief.brief_id`.
-
-## Error handoff
-
-All provider failures become `ProviderError` with these stable fields:
-
-```text
-code, message, provider, model, retryable, status_code
-```
-
-Messages never contain request headers or credentials. Tín can store
-`error.as_dict()` in `RunEvent` and apply retry/backoff only when `retryable` is
-true. The normalized codes cover missing credentials, auth/permission, quota,
-timeout, network, model availability, content filtering, malformed JSON,
-schema failure, and generic provider failure.
-
-## Commands
+Offline verification:
 
 ```powershell
-python scripts/provider_spike.py --dry-run
 python -m unittest discover -s tests -v
-python scripts/provider_spike.py --provider all
-python scripts/ai_day1_demo.py
 ```
 
-The first two commands consume no provider quota. The provider spike consumes
-one request on each primary route. The Day 1 demo consumes one Gemini request
-and one Groq request.
+Live G1 verification (one Gemini and one Groq request):
+
+```powershell
+python run.py --account responsible-ai-lab --topic "Responsible AI for small teams"
+```

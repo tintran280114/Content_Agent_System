@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "content-agent-system"
+version = "0.1.0"
+description = "CLI-first multi-provider social content agent MVP."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pydantic>=2.8,<3",
+    "python-dotenv>=1,<2",
+    "google-genai>=2.12,<3",
+    "groq>=1.5,<2",
+    "openai>=2.46,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2,<2",
+    "ruff>=0.5,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["content_agent*"]
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "scripts", "tests"]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

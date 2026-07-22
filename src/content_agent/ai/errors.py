@@ -67,8 +67,15 @@ def normalize_provider_exception(exc: Exception, *, provider: str, model: str) -
     status = getattr(exc, "status_code", None)
     body = getattr(exc, "body", None)
     body_text = str(body or "").lower()
-    message_text = str(exc).lower()
-    combined = f"{body_text} {message_text}"
+    chain_parts: list[str] = []
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited and len(visited) < 5:
+        visited.add(id(current))
+        chain_parts.append(type(current).__name__.lower())
+        chain_parts.append(str(current).lower())
+        current = current.__cause__ or current.__context__
+    combined = " ".join([body_text, *chain_parts])
 
     if status == 401:
         code, safe, retryable = ErrorCode.AUTHENTICATION, "Provider rejected the credential.", False

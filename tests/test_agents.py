@@ -90,6 +90,10 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(result.research.metadata.provider, "gemini")
         self.assertEqual(result.draft.metadata.provider, "groq")
         self.assertNotEqual(result.research.metadata.provider, result.draft.metadata.provider)
+        copy_prompt = "\n".join(message.content for message in copy_provider.last_messages)
+        self.assertIn("Keep the post under 900 characters", copy_prompt)
+        self.assertIn("#ResponsibleAI", copy_prompt)
+        self.assertIn("revolutionary", copy_prompt)
 
     def test_copywriter_rejects_policy_account_mismatch(self) -> None:
         research_provider = FakeProvider("gemini", "gemini-test", self.research_payload)
