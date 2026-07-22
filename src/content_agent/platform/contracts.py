@@ -22,6 +22,11 @@ class RunStep(str, Enum):
     POLICY = "policy"
     RESEARCH = "research"
     COPYWRITER = "copywriter"
+    RULE_CRITIC = "rule_critic"
+    LLM_CRITIC = "llm_critic"
+    REWRITE = "rewrite"
+    HUMAN_REVIEW = "human_review"
+    PUBLISHER = "publisher"
 
 
 class EventState(str, Enum):

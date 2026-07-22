@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !.env.ai.example
+.streamlit/secrets.toml
 
 # Python virtual environments
 .venv/

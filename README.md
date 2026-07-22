@@ -1,209 +1,194 @@
-# Social Content Agent System — Day 1 MVP
+# Social Content Agent System — Wednesday MVP
 
-This repository implements the complete Monday/G1 vertical slice from the
-Wednesday MVP sprint plan:
-
-```text
-Markdown AccountPolicy -> Gemini Research -> Groq Copywriter -> SQLite
-```
-
-One CLI invocation loads a validated account policy, creates one `run_id`,
-executes both structured AI agents, and persists the `AccountPolicy`,
-`ResearchBrief`, `DraftPost`, and ordered `RunEvent` records in one database.
-
-## Day 1 scope
-
-- **AI-01 (Trọng):** strict AI schemas, Gemini/Groq/GitHub Models adapters,
-  provider routing, versioned prompts, normalized provider errors, and live
-  provider-spike tooling.
-- **PLT-01 (Tín):** repository skeleton, CLI, frozen run/event contracts,
-  orchestrator, SQLite schema, traceable failures, dependency entry point, and
-  minimal CI.
-- **POL-01 (Tài):** Policy Spec v0.1, Markdown parser with actionable errors,
-  template, three differentiated account policies, and valid/invalid fixtures.
-
-Day 2 critic/rewrite/human-review/Publisher work and Day 3 evaluation/release
-work are intentionally outside this branch's Day 1 boundary.
-
-## Architecture
+A CLI-first, scheduled social-content batch pipeline with a Streamlit operations
+dashboard. The system wakes up for a few minutes, generates and evaluates posts,
+persists traceable state in SQLite, and routes unsafe output to human review.
+It does not need FastAPI, React, authentication, or a 24/7 application server.
 
 ```text
-accounts/<slug>.md
-        |
-        v
-  AccountPolicy parser/validation
-        |
-        v
-  Day1Orchestrator ---------> SQLite runs + policies + artifacts + run_events
-        |                                      ^
-        +--> Gemini ResearchBrief -------------+
-        |                                      |
-        +--> Groq DraftPost --------------------+
+Markdown policy
+  → Gemini Research
+  → Groq Copywriter
+  → deterministic Rule Critic
+  → GitHub Models LLM Critic
+  → pass / at most two Groq rewrites / human review
+  → guarded mock Publisher
+  → SQLite + Streamlit
 ```
 
-The provider adapters never receive credentials in prompts. Shareable files
-contain blank environment-variable values only, and normalized provider errors
-exclude request headers and API keys.
+## MVP capabilities
 
-## Quick start (Windows, under 10 minutes)
+- Add accounts with versioned Markdown only; three differentiated policies and
+  a template are included.
+- Run one account with `--account` or every account with `--all`.
+- Preserve the Day 1 Policy → Research → Copywriter mode.
+- Run the full hybrid-Critic workflow with strict provider separation.
+- Retry safe 429/timeout/provider failures with bounded exponential backoff.
+- Enforce a maximum of two AI rewrites; terminal failures enter human review.
+- Approve, reject, or edit through Streamlit with persisted audit events.
+- Mock-publish only Critic-passed or explicitly human-approved content.
+- Inspect queues, scores, histories, tokens, costs, revisions, and errors.
+- Run twice daily or manually through GitHub Actions.
+- Resume the fixed 10-topic × three-policy evaluation after interruption.
+- Deploy the dashboard on Streamlit Community Cloud without a backend API.
 
-From the repository root:
+## Quick start on Windows Command Prompt
 
-```powershell
+```cmd
+cd /d D:\Fantek_material\AI_AgentSystem\Content_Agent_System
 py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate.bat
 python -m pip install -r requirements.txt
-Copy-Item .env.example .env
+copy .env.example .env
 ```
 
-Fill in `.env` locally:
+Do not overwrite an existing `.env`. Fill the local file with your own
+free-tier credentials:
 
 ```dotenv
-GEMINI_API_KEY=<your-own-gemini-key>
+GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.1-flash-lite
-
-GROQ_API_KEY=<your-own-groq-key>
+GROQ_API_KEY=
 GROQ_MODEL=llama-3.3-70b-versatile
-
-GITHUB_MODELS_TOKEN=<your-own-github-models-token>
+GITHUB_MODELS_TOKEN=
 GITHUB_MODELS_MODEL=openai/gpt-4o-mini
 ```
 
-Never commit `.env`, paste keys into prompts, or include them in screenshots,
-logs, issues, pull requests, or artifacts.
+Never commit `.env` or `.streamlit/secrets.toml`.
 
-## Verify without spending provider quota
+## Offline verification
 
-```powershell
+These commands consume no provider quota:
+
+```cmd
 python run.py --help
 python run.py --list-accounts
-python scripts/provider_spike.py --dry-run
+python scripts\provider_spike.py --dry-run
+python scripts\evaluate.py --help
 python -m unittest discover -s tests -v
 ```
 
-Expected account list:
+## CLI batch pipeline
 
-```text
-community-learning      Facebook    max_length=1200
-responsible-ai-lab      LinkedIn    max_length=900
-startup-growth          X           max_length=280
+Day 1 compatible draft-only run:
+
+```cmd
+python run.py --account responsible-ai-lab --topic "Responsible AI for small teams" --database artifacts\content_agent.sqlite3
 ```
 
-The offline suite covers policy validation, AI handoffs, provider separation,
-structured responses, error normalization, SQLite persistence, one-run
-traceability, CLI behavior, rate-limit failure state, and secret scanning.
+Full safety/review pipeline:
 
-## Run the integrated Day 1 vertical slice
-
-This uses one Gemini request and one Groq request:
-
-```powershell
-python run.py --account responsible-ai-lab `
-  --topic "How small teams can use AI responsibly for social content"
+```cmd
+python run.py --account responsible-ai-lab --pipeline full --topic "Responsible AI for small teams" --database artifacts\content_agent.sqlite3
 ```
 
-An account slug resolves to `accounts/<slug>.md`. An explicit policy path also
-works:
+All three policies (`--all` defaults to the full pipeline):
 
-```powershell
-python run.py --account accounts/startup-growth.md `
-  --topic "A practical weekly growth experiment"
+```cmd
+python run.py --all --topic "Responsible AI for small teams" --database artifacts\content_agent.sqlite3
 ```
 
-Success output contains the shared `run_id`, linked research/draft IDs, and the
-database path. The default database is `artifacts/day1.sqlite3` and is ignored
-by Git. Missing policies exit with code 2; safe provider/pipeline failures exit
-with code 3 and persist the failed state under the printed `run_id`.
+A successful full run ends as `published` through the local mock Publisher. A
+draft that still fails after two rewrites ends as `human_review`. A Critic or
+rewrite provider failure after a valid draft exists also fails safe into the
+queue; it is never auto-published.
 
-## Inspect a run in SQLite
+## Streamlit dashboard
 
-The G1 evidence is stored in four tables:
-
-- `runs`: account, topic, terminal state, and safe failure fields;
-- `policies`: source file, Policy Spec version, and parsed policy JSON;
-- `artifacts`: `account_policy`, `research_brief`, and `draft_post` JSON;
-- `run_events`: ordered step/state/attempt, provider/model, token/cost, and
-  normalized error metadata.
-
-Use any SQLite viewer, or run this read-only Python command after replacing the
-ID:
-
-```powershell
-python -c "import sqlite3; db=sqlite3.connect('artifacts/day1.sqlite3'); db.row_factory=sqlite3.Row; print(dict(db.execute('select * from runs where run_id=?', ('<run_id>',)).fetchone()))"
+```cmd
+streamlit run streamlit_app.py
 ```
 
-The consumer invariant is
-`DraftPost.brief_id == ResearchBrief.brief_id`, and all policy, artifact, and
-event rows reference that same `run_id`.
+Open `http://localhost:8501`. The dashboard reads and writes the same SQLite
+database and provides:
 
-## Add account 4 without changing Python
+- latest runs and workflow states;
+- real human-review queue and Critic details;
+- approve/reject/edit actions with operator, note, time, and revision audit;
+- Critic score history and provider token/cost summaries;
+- SQLite snapshot upload/download for GitHub Actions and Community Cloud.
 
-```powershell
-Copy-Item accounts/template.md accounts/account-4.md
+Set another database in the sidebar or with:
+
+```cmd
+set CONTENT_AGENT_DB=artifacts\content_agent.sqlite3
+streamlit run streamlit_app.py
 ```
 
-Edit only the new Markdown file, then validate it:
+## Fixed 30-output evaluation
 
-```powershell
+This makes live provider calls. Results are saved after every case, so the same
+command resumes completed work:
+
+```cmd
+python scripts\evaluate.py --evaluation-id wednesday-v1 --database artifacts\evaluation.sqlite3 --output artifacts\evaluation_report.json
+```
+
+Use `--limit 1` for a one-case smoke test. Use `--no-resume` only when you
+intentionally want new runs for already-completed cases.
+
+## Scheduled automation
+
+`.github/workflows/batch.yml` has manual dispatch and two daily schedules at
+08:17 and 20:17 in `Asia/Ho_Chi_Minh`. Add `GEMINI_API_KEY`, `GROQ_API_KEY`, and
+`GITHUB_MODELS_TOKEN` as GitHub Actions repository secrets. Each run uploads the
+SQLite database and evidence under a 14-day workflow artifact.
+
+Scheduled workflows run only after the workflow exists on the repository's
+default branch. GitHub notes that schedules may be delayed under load, so this
+is a batch cadence rather than a precise real-time SLA.
+
+## Deploy on Streamlit Community Cloud
+
+1. Push/merge the release branch to GitHub.
+2. At [share.streamlit.io](https://share.streamlit.io), select **Create app**.
+3. Choose the repository, branch, and root entrypoint `streamlit_app.py`.
+4. In Advanced settings choose Python 3.11.
+5. Paste `.streamlit/secrets.toml.example` into Secrets after filling values.
+6. Deploy, then upload the latest SQLite artifact in the dashboard sidebar.
+
+Community Cloud initializes apps from the repository root and installs the
+pinned `streamlit==1.59.2` from `requirements.txt`. Real secrets belong in the
+Cloud Secrets console, never Git. See
+[`docs/deployment_streamlit.md`](docs/deployment_streamlit.md) for the exact
+handoff and storage limitation.
+
+## Add account 4 without Python changes
+
+```cmd
+copy accounts\template.md accounts\account-4.md
 python run.py --list-accounts
-python run.py --account account-4 --topic "Your topic"
+python run.py --account account-4 --pipeline full --topic "Your topic"
 ```
 
-The exact syntax, required sections, and validation rules are in
-[`docs/policy_spec.md`](docs/policy_spec.md).
+Edit only `accounts/account-4.md`; Git provides the policy version history.
 
-## Provider validation
-
-| Role | Provider | Primary model | Credential |
-|---|---|---|---|
-| Research | Gemini | `gemini-3.1-flash-lite` | `GEMINI_API_KEY` |
-| Copywriter | Groq | `llama-3.3-70b-versatile` | `GROQ_API_KEY` |
-| Critic contract probe | GitHub Models | `openai/gpt-4o-mini` | `GITHUB_MODELS_TOKEN` |
-
-Run one schema-valid request per primary provider:
-
-```powershell
-python scripts/provider_spike.py --provider all
-```
-
-Run the direct Gemini-to-Groq AI handoff without platform persistence:
-
-```powershell
-python scripts/ai_day1_demo.py
-```
-
-Provider artifacts are written under `artifacts/` and must never include a
-credential. Free-tier quotas and model catalogs are not SLAs; use
-`docs/ai/provider_matrix.md` for the pinned fallback decisions.
-
-## Project layout
+## Project structure
 
 ```text
-.github/workflows/ci.yml       minimal push/PR/manual CI
-accounts/                      template + three Markdown policies
-docs/                          Policy, platform, AI, and G1 handoff docs
-pyproject.toml                 installable package metadata and tool config
-run.py                         integrated Day 1 CLI
-scripts/                       live provider and AI handoff checks
-src/content_agent/ai/          contracts, prompts, agents, providers, routing
-src/content_agent/platform/    RunEvent contract and SQLite store
-src/content_agent/policy.py    AccountPolicy and Markdown parser
-src/content_agent/orchestrator.py
-tests/                         offline contract/unit/integration/security tests
+.github/workflows/       CI and twice-daily/manual batch automation
+.streamlit/              dashboard theme and safe secrets template
+accounts/                Markdown policies and account template
+evaluation/              frozen ten-topic evaluation set
+streamlit_app.py         only interactive UI surface
+run.py                   one-account and --all batch CLI
+scripts/evaluate.py      resumable 30-case evaluation
+src/content_agent/ai/    providers, agents, prompts, schemas
+src/content_agent/       critics, orchestration, review, publisher, policy
+src/content_agent/platform/ SQLite schema, events, usage, audit queries
+tests/                   offline unit, resilience, E2E, UI, security tests
 ```
 
-## Day 1 Definition of Done
+## Safety boundary
 
-- Three differentiated policies and the template parse through one strict
-  Markdown contract; invalid input names the file and section.
-- Research and Copywriter consume the parsed `AccountPolicy` and return strict,
-  linked schemas with provider/model/prompt/usage metadata.
-- A single CLI run persists policy, research, draft, and events under one
-  `run_id`; the success and provider-failure paths are tested.
-- `python run.py --help`, account validation, the test suite, and minimal CI
-  pass without credentials.
-- `.env` and runtime databases/artifacts are ignored; the security test finds
-  no provider credential in shareable files.
+- The Publisher is a mock; no real social network API is called.
+- Rule violations cannot be waived by the LLM Critic.
+- Copywriter/rewriter uses Groq; Critic uses GitHub Models.
+- AI rewrite count cannot exceed two.
+- Failed/rejected/human-review states are blocked from publishing.
+- Human approval requires an audit note; edits create immutable revisions.
+- Runtime artifacts and credentials are ignored by Git.
 
-See `docs/day1_g1_evidence.md` for the cross-owner evidence matrix and
-`docs/platform/day1_contracts.md` for the frozen database/event contract.
+Known limitations and deferred production work are documented in
+[`docs/known_limitations.md`](docs/known_limitations.md). Day 1 live evidence is
+preserved in [`docs/evidence/day1_g1_live_2026-07-22.md`](docs/evidence/day1_g1_live_2026-07-22.md).

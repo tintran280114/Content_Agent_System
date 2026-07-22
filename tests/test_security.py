@@ -15,7 +15,7 @@ class SecurityTests(unittest.TestCase):
             re.compile(r"github_pat_[0-9A-Za-z_]{40,}"),
             re.compile(r"ghp_[0-9A-Za-z]{30,}"),
         ]
-        excluded = {".env", ".git", ".venv", "artifacts", "__pycache__"}
+        excluded = {".env", "secrets.toml", ".git", ".venv", "artifacts", "__pycache__"}
         findings: list[str] = []
         for path in ROOT.rglob("*"):
             if not path.is_file() or any(part in excluded for part in path.parts):

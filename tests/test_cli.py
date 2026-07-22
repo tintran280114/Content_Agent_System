@@ -21,6 +21,8 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0)
         self.assertIn("--account", completed.stdout)
+        self.assertIn("--all", completed.stdout)
+        self.assertIn("--pipeline", completed.stdout)
         self.assertIn("--database", completed.stdout)
 
     def test_list_accounts_validates_all_three_policies(self) -> None:

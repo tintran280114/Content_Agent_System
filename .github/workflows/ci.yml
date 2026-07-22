@@ -1,4 +1,4 @@
-name: Day 1 CI
+name: MVP CI
 
 on:
   push:

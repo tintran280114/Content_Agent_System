@@ -1,1 +1,2 @@
 -r requirements-ai.txt
+streamlit==1.59.2

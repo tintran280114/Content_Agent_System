@@ -1,4 +1,4 @@
-"""Platform contracts and SQLite persistence for the Day 1 vertical slice."""
+"""Platform contracts and SQLite persistence for the full MVP pipeline."""
 
 from .contracts import EventState, RunEvent, RunState, RunStep
 from .storage import SQLiteRunStore

@@ -12,11 +12,12 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from ..ai.models import TokenUsage
+from ..ai.models import CriticResult, DraftPost, ResearchBrief, TokenUsage
+from ..critics import RuleCriticResult
 from ..policy import AccountPolicy
 from .contracts import EventState, RunEvent, RunState, RunStep
 
-SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -75,6 +76,81 @@ CREATE TABLE IF NOT EXISTS run_events (
 
 CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_runs_account_state ON runs(account_id, state);
+
+CREATE TABLE IF NOT EXISTS workflow_items (
+    run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+    current_draft_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    rewrite_count INTEGER NOT NULL DEFAULT 0 CHECK (rewrite_count BETWEEN 0 AND 2),
+    version INTEGER NOT NULL DEFAULT 1,
+    last_error_code TEXT,
+    last_error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS draft_revisions (
+    draft_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    parent_draft_id TEXT,
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    origin TEXT NOT NULL CHECK (origin IN ('initial_ai', 'ai_rewrite', 'human_edit')),
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS critic_results (
+    critic_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    draft_id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    rule_passed INTEGER NOT NULL,
+    score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
+    decision TEXT NOT NULL,
+    rule_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS review_actions (
+    action_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    draft_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'edit')),
+    actor TEXT NOT NULL,
+    note TEXT,
+    edited_content TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS publish_attempts (
+    publish_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    draft_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('published', 'blocked')),
+    reason TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_cases (
+    case_key TEXT PRIMARY KEY,
+    evaluation_id TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
+    run_id TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_state ON workflow_items(state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_draft_revisions_run ON draft_revisions(run_id, revision);
+CREATE INDEX IF NOT EXISTS idx_critic_results_run ON critic_results(run_id, revision);
+CREATE INDEX IF NOT EXISTS idx_review_actions_run ON review_actions(run_id, action_id);
+CREATE INDEX IF NOT EXISTS idx_evaluation_id ON evaluation_cases(evaluation_id, status);
 """
 
 
@@ -277,3 +353,359 @@ class SQLiteRunStore:
             }
             for row in rows
         }
+
+    def create_workflow(
+        self,
+        *,
+        run_id: UUID,
+        current_draft_id: UUID,
+        state: str,
+    ) -> None:
+        now = _utc_now().isoformat()
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO workflow_items(run_id, current_draft_id, state, created_at, updated_at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (str(run_id), str(current_draft_id), state, now, now),
+            )
+
+    def save_draft_revision(
+        self,
+        *,
+        run_id: UUID | str,
+        draft: DraftPost,
+        revision: int,
+        origin: str,
+        parent_draft_id: UUID | str | None = None,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO draft_revisions(
+                    draft_id, run_id, parent_draft_id, revision, origin, payload_json, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(draft.draft_id),
+                    str(run_id),
+                    str(parent_draft_id) if parent_draft_id else None,
+                    revision,
+                    origin,
+                    draft.model_dump_json(),
+                    _utc_now().isoformat(),
+                ),
+            )
+
+    def save_critic_result(
+        self,
+        *,
+        run_id: UUID | str,
+        revision: int,
+        rule_result: RuleCriticResult,
+        critic: CriticResult,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO critic_results(
+                    critic_id, run_id, draft_id, revision, rule_passed, score,
+                    decision, rule_json, payload_json, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(critic.critic_id),
+                    str(run_id),
+                    str(critic.draft_id),
+                    revision,
+                    int(rule_result.passed),
+                    critic.score,
+                    critic.decision.value,
+                    rule_result.model_dump_json(),
+                    critic.model_dump_json(),
+                    _utc_now().isoformat(),
+                ),
+            )
+
+    def update_workflow(
+        self,
+        run_id: UUID | str,
+        *,
+        state: str,
+        current_draft_id: UUID | str | None = None,
+        rewrite_count: int | None = None,
+        last_error_code: str | None = None,
+        last_error_message: str | None = None,
+        expected_version: int | None = None,
+    ) -> dict[str, Any]:
+        assignments = ["state = ?", "updated_at = ?", "version = version + 1"]
+        values: list[Any] = [state, _utc_now().isoformat()]
+        if current_draft_id is not None:
+            assignments.append("current_draft_id = ?")
+            values.append(str(current_draft_id))
+        if rewrite_count is not None:
+            assignments.append("rewrite_count = ?")
+            values.append(rewrite_count)
+        assignments.extend(["last_error_code = ?", "last_error_message = ?"])
+        values.extend([last_error_code, last_error_message])
+        values.append(str(run_id))
+        where = "run_id = ?"
+        if expected_version is not None:
+            where += " AND version = ?"
+            values.append(expected_version)
+
+        with self._connection() as connection:
+            cursor = connection.execute(
+                f"UPDATE workflow_items SET {', '.join(assignments)} WHERE {where}",
+                values,
+            )
+            if cursor.rowcount != 1:
+                if expected_version is not None:
+                    raise RuntimeError("Review item changed; refresh before applying this action.")
+                raise KeyError(f"unknown workflow run_id: {run_id}")
+            row = connection.execute(
+                "SELECT * FROM workflow_items WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return dict(row)
+
+    def get_workflow(self, run_id: UUID | str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM workflow_items WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_policy(self, run_id: UUID | str) -> AccountPolicy:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM policies WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        if not row:
+            raise KeyError(f"policy not found for run_id: {run_id}")
+        return AccountPolicy.model_validate_json(str(row["payload_json"]))
+
+    def get_research(self, run_id: UUID | str) -> ResearchBrief:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM artifacts WHERE run_id = ? AND kind = 'research_brief'",
+                (str(run_id),),
+            ).fetchone()
+        if not row:
+            raise KeyError(f"research brief not found for run_id: {run_id}")
+        return ResearchBrief.model_validate_json(str(row["payload_json"]))
+
+    def get_current_draft(self, run_id: UUID | str) -> DraftPost:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT d.payload_json
+                FROM workflow_items w
+                JOIN draft_revisions d ON d.draft_id = w.current_draft_id
+                WHERE w.run_id = ?
+                """,
+                (str(run_id),),
+            ).fetchone()
+        if not row:
+            raise KeyError(f"current draft not found for run_id: {run_id}")
+        return DraftPost.model_validate_json(str(row["payload_json"]))
+
+    def get_latest_critic(self, run_id: UUID | str) -> CriticResult | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM critic_results WHERE run_id = ? ORDER BY revision DESC LIMIT 1",
+                (str(run_id),),
+            ).fetchone()
+        return CriticResult.model_validate_json(str(row["payload_json"])) if row else None
+
+    def next_revision_number(self, run_id: UUID | str) -> int:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(revision), -1) + 1 AS next_revision "
+                "FROM draft_revisions WHERE run_id = ?",
+                (str(run_id),),
+            ).fetchone()
+        return int(row["next_revision"])
+
+    def add_review_action(
+        self,
+        *,
+        run_id: UUID | str,
+        draft_id: UUID | str,
+        action: str,
+        actor: str,
+        note: str | None = None,
+        edited_content: str | None = None,
+    ) -> int:
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO review_actions(
+                    run_id, draft_id, action, actor, note, edited_content, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(run_id),
+                    str(draft_id),
+                    action,
+                    actor.strip(),
+                    note.strip() if note else None,
+                    edited_content,
+                    _utc_now().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def add_publish_attempt(self, *, receipt: BaseModel) -> None:
+        payload = receipt.model_dump(mode="json")
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO publish_attempts(
+                    publish_id, run_id, draft_id, status, reason, payload_json, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(payload["publish_id"]),
+                    str(payload["run_id"]),
+                    str(payload["draft_id"]),
+                    str(payload["status"]),
+                    str(payload["reason"]),
+                    receipt.model_dump_json(),
+                    _utc_now().isoformat(),
+                ),
+            )
+
+    def list_review_queue(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    w.run_id, r.account_id, r.topic, w.current_draft_id, w.state,
+                    w.rewrite_count, w.version, w.last_error_code, w.last_error_message,
+                    w.updated_at,
+                    (SELECT score FROM critic_results c WHERE c.run_id = w.run_id
+                     ORDER BY revision DESC LIMIT 1) AS score,
+                    (SELECT decision FROM critic_results c WHERE c.run_id = w.run_id
+                     ORDER BY revision DESC LIMIT 1) AS decision
+                FROM workflow_items w
+                JOIN runs r ON r.run_id = w.run_id
+                WHERE w.state = 'human_review'
+                ORDER BY w.updated_at
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_runs(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT r.*, w.state AS workflow_state, w.rewrite_count, w.current_draft_id,
+                       (SELECT score FROM critic_results c WHERE c.run_id = r.run_id
+                        ORDER BY revision DESC LIMIT 1) AS score
+                FROM runs r
+                LEFT JOIN workflow_items w ON w.run_id = r.run_id
+                ORDER BY r.created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_review_actions(self, run_id: UUID | str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM review_actions WHERE run_id = ? ORDER BY action_id",
+                (str(run_id),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_publish_attempts(self, run_id: UUID | str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM publish_attempts WHERE run_id = ? ORDER BY created_at",
+                (str(run_id),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def score_history(self) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT c.run_id, r.account_id, c.revision, c.score, c.rule_passed,
+                       c.decision, c.created_at
+                FROM critic_results c
+                JOIN runs r ON r.run_id = c.run_id
+                ORDER BY c.created_at
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def usage_summary(self) -> dict[str, Any]:
+        with self._connection() as connection:
+            total = connection.execute(
+                """
+                SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                       COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                       SUM(estimated_cost_usd) AS estimated_cost_usd
+                FROM run_events
+                """
+            ).fetchone()
+            by_provider = connection.execute(
+                """
+                SELECT provider, model, SUM(input_tokens) AS input_tokens,
+                       SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens,
+                       SUM(estimated_cost_usd) AS estimated_cost_usd
+                FROM run_events
+                WHERE provider IS NOT NULL
+                GROUP BY provider, model
+                ORDER BY provider, model
+                """
+            ).fetchall()
+        return {"total": dict(total), "by_provider": [dict(row) for row in by_provider]}
+
+    def upsert_evaluation_case(
+        self,
+        *,
+        case_key: str,
+        evaluation_id: str,
+        topic: str,
+        account_id: str,
+        status: str,
+        run_id: UUID | str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO evaluation_cases(
+                    case_key, evaluation_id, topic, account_id, status, run_id,
+                    error_code, error_message, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(case_key) DO UPDATE SET
+                    status = excluded.status,
+                    run_id = excluded.run_id,
+                    error_code = excluded.error_code,
+                    error_message = excluded.error_message,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    case_key,
+                    evaluation_id,
+                    topic,
+                    account_id,
+                    status,
+                    str(run_id) if run_id else None,
+                    error_code,
+                    error_message,
+                    _utc_now().isoformat(),
+                ),
+            )
+
+    def list_evaluation_cases(self, evaluation_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM evaluation_cases WHERE evaluation_id = ? ORDER BY account_id, topic",
+                (evaluation_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]

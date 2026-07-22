@@ -1,6 +1,6 @@
-"""Provider-independent contracts and agents for the Day 1 AI vertical slice."""
+"""Provider-independent contracts and agents for the full MVP pipeline."""
 
-from .agents import CopywriterAgent, ResearchAgent, run_research_copywriter
+from .agents import CriticAgent, CopywriterAgent, ResearchAgent, RewriteAgent, run_research_copywriter
 from .base import ChatMessage, ProviderResponse, StructuredProvider
 from .config import DEFAULT_ROUTES, ModelRoute, Role
 from .models import (
@@ -16,6 +16,7 @@ from .models import (
 __all__ = [
     "ChatMessage",
     "CopywriterAgent",
+    "CriticAgent",
     "CriticResult",
     "DEFAULT_ROUTES",
     "Decision",
@@ -26,6 +27,7 @@ __all__ = [
     "ProviderResponse",
     "ResearchAgent",
     "ResearchBrief",
+    "RewriteAgent",
     "Role",
     "StructuredProvider",
     "TokenUsage",
