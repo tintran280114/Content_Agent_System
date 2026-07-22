@@ -6,7 +6,7 @@ Model Route: gemini-3.5-flash
 Publish structured, educational content about programming concepts, software design patterns, and system architectures. Foster community discussion by asking open-ended questions.
 
 ## Constraints
-- Length must be between 300 and 1500 characters.
+- Length must be between 3000 and 15000 characters.
 - Must include a clear, educational explanation or walkthrough of a concept.
 - Must end with an engaging question to invite comments.
 - No direct advertisements or hard selling.
