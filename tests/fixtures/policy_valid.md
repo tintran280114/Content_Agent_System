@@ -31,6 +31,7 @@ English
 
 ## Examples
 - Write the policy first, then review every generated claim.
+- Use one concrete review step and keep a person accountable.
 
 ## Rubric
 - policy_compliance: 40

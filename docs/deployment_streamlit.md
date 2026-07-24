@@ -1,48 +1,49 @@
-# Streamlit deployment handoff
+# Streamlit deployment
 
-## Local persistent mode
+## Local operation
+
+Generate content with the CLI, then open the review surface:
 
 ```cmd
-set CONTENT_AGENT_DB=artifacts\content_agent.sqlite3
+python run.py --all --topic "How small teams can use AI responsibly"
 streamlit run streamlit_app.py
 ```
 
-This is the recommended operator mode because the CLI, dashboard actions, and
-mock Publisher all use the same durable local SQLite file.
+Both default to `artifacts/content_agent.sqlite3`. Streamlit performs no LLM
+calls and needs no provider credentials.
 
-## Community Cloud
-
-Streamlit Community Cloud deploys from GitHub and runs the entrypoint from the
-repository root. The deployment values are:
+## Community Cloud settings
 
 | Setting | Value |
 |---|---|
-| Entrypoint | `streamlit_app.py` |
+| Repository file | `streamlit_app.py` |
 | Python | `3.11` |
-| Dependency file | root `requirements.txt` |
+| Dependencies | root `requirements.txt` |
 | Configuration | root `.streamlit/config.toml` |
-| Secrets template | `.streamlit/secrets.toml.example` |
+| LLM secrets | none |
 
-Deployment steps:
+1. Push the chosen branch to GitHub.
+2. Create a Community Cloud app and enter the branch manually if the dropdown
+   has not refreshed.
+3. Use root entrypoint `streamlit_app.py` and Python 3.11.
+4. Deploy; an empty SQLite file is created automatically.
+5. Download and expand `content-agent-latest` from a GitHub Actions run.
+6. Upload `content_agent.sqlite3` through **Cloud snapshot handoff**.
+7. Review, edit, approve, or reject queued items.
+8. Download the reviewed SQLite evidence before rebooting or redeploying.
 
-1. Merge the app to a GitHub branch visible to the Streamlit account.
-2. Open `share.streamlit.io`, create an app, and select repo/branch/entrypoint.
-3. Open Advanced settings, select Python 3.11, and paste filled TOML secrets.
-4. Deploy and inspect the Cloud logs.
-5. Download the latest `content-agent-snapshot-*` artifact from GitHub Actions.
-6. Upload its SQLite file through the dashboard sidebar.
-7. After review actions, download the updated snapshot before reboot/hibernation.
+The uploaded file is validated for SQLite format, integrity, size, and required
+tables before replacement.
+
+## Persistence boundary
+
+Community Cloud does not guarantee local-file persistence. GitHub Actions also
+runs on another machine. Snapshot upload/download is therefore an explicit MVP
+handoff, not a shared cloud database. For durable multi-user synchronization a
+managed store would be required, and that is outside the sprint scope.
 
 Official references:
 
 - https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy
-- https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/file-organization
-- https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management
-
-## Honest storage boundary
-
-Community Cloud is the free dashboard host, not the batch scheduler or durable
-database. The MVP therefore uses explicit SQLite snapshot upload/download.
-Automatic bidirectional cloud database synchronization, authentication, and a
-production datastore are deferred by the sprint scope. Do not assume a local
-Cloud SQLite file survives every reboot or app replacement.
+- https://docs.streamlit.io/develop/concepts/connections/connecting-to-data
+- https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule

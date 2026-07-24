@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from .platform import SQLiteRunStore
 from .workflow import PublishReceipt, PublishStatus, WorkflowState
+
+
+@runtime_checkable
+class Publisher(Protocol):
+    """Swappable publishing boundary used by orchestration and review services."""
+
+    def publish(self, run_id: UUID | str) -> PublishReceipt:
+        """Publish or block the authoritative current draft for one run."""
 
 
 class MockPublisher:

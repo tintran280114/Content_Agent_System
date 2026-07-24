@@ -1,15 +1,14 @@
 # Five-minute demo script
 
-1. Show `accounts/` and copy `template.md` to an account-4 Markdown file. Run
+1. Show `accounts/`, copy `template.md` to a fourth account, and run
    `python run.py --list-accounts` to prove no Python change is required.
-2. Run one account with `--pipeline full`; point out the shared run ID, Critic
-   score, rewrite count, and final workflow state.
-3. Run the offline fail-after-two test or open its saved SQLite snapshot. Show
-   the item in Streamlit Human review with violations and score history.
-4. Edit the content, then approve with an operator and mandatory note. Show the
-   immutable actions and revisions, followed by the mock Publisher receipt.
-5. Show a rejected/failed state being blocked, token/cost views, the scheduled
-   workflow, and the resumable evaluation report.
+2. Run `python run.py --account responsible-ai-lab --topic "..."`; point out
+   run ID, score, rewrite count, terminal state, and SQLite path in the CLI.
+3. Open Streamlit and inspect the same run under Run history and Scores & usage.
+4. Load a saved fail-after-two snapshot, edit the queued post, approve with an
+   operator and mandatory note, then show the immutable audit and mock receipt.
+5. Show a rejected state being blocked, the scheduled workflow, and the
+   evaluation JSON's same-topic output comparison and per-account usage.
 
-Use the same release commit and SQLite snapshot for every step. Do not expose
-`.env`, Streamlit secrets, request headers, or provider tokens on screen.
+Use one commit and one SQLite snapshot throughout. Do not display `.env`,
+Actions Secrets, request headers, or provider tokens.

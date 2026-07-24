@@ -13,8 +13,7 @@ if str(SRC) not in sys.path:
 
 from dotenv import load_dotenv
 
-from content_agent.orchestrator import Day1Orchestrator, Day1RunError
-from content_agent.full_pipeline import FullPipelineError, FullPipelineOrchestrator
+from content_agent.orchestrator import PipelineMode, PipelineOrchestrator, PipelineRunError
 from content_agent.platform import SQLiteRunStore
 from content_agent.policy import PolicyParseError, load_policies
 
@@ -45,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("draft", "full"),
         help=(
             "draft preserves the Day 1 slice; full adds Critic, rewrites, review, and mock publish. "
-            "Default: draft for --account, full for --all."
+            "Default: full."
         ),
     )
     parser.add_argument(
@@ -57,8 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--database",
         type=Path,
-        default=ROOT / "artifacts" / "day1.sqlite3",
-        help="SQLite database path (default: artifacts/day1.sqlite3).",
+        default=ROOT / "artifacts" / "content_agent.sqlite3",
+        help="SQLite database path (default: artifacts/content_agent.sqlite3).",
     )
     return parser
 
@@ -85,13 +84,15 @@ def _print_result(result, *, database: Path, pipeline: str) -> None:
         print(f"workflow_state={result.workflow_state.value}")
         print(f"rewrite_count={result.rewrite_count}")
         print(f"critic_score={result.critic.score if result.critic else 'unavailable'}")
+        if result.terminal_error_code:
+            print(f"terminal_error_code={result.terminal_error_code}")
     print(f"database={database}")
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     load_dotenv(ROOT / ".env", override=False)
-    pipeline = args.pipeline or ("full" if args.all else "draft")
+    pipeline = args.pipeline or "full"
 
     try:
         if args.list_accounts:
@@ -110,25 +111,29 @@ def main(argv: list[str] | None = None) -> int:
         failures = 0
         for index, policy_path in enumerate(policy_paths):
             try:
-                if pipeline == "full":
-                    result = FullPipelineOrchestrator(store).run(
-                        topic=args.topic,
-                        policy_path=policy_path,
-                    )
-                else:
-                    result = Day1Orchestrator(store).run(
-                        topic=args.topic,
-                        policy_path=policy_path,
-                    )
+                result = PipelineOrchestrator(store).run(
+                    topic=args.topic,
+                    policy_path=policy_path,
+                    mode=PipelineMode(pipeline),
+                )
                 if index:
                     print()
                 _print_result(result, database=args.database, pipeline=pipeline)
-            except (Day1RunError, FullPipelineError) as exc:
+                if result.terminal_error_code == "quota_exhausted":
+                    print(
+                        "Batch stopped because a provider/application daily quota was exhausted.",
+                        file=sys.stderr,
+                    )
+                    return 4
+            except PipelineRunError as exc:
                 failures += 1
                 print(
                     f"Run {exc.run_id} failed at {exc.step.value} ({exc.code}): {exc}",
                     file=sys.stderr,
                 )
+                if exc.code == "quota_exhausted":
+                    print("Batch stopped before the next account to protect quota.", file=sys.stderr)
+                    return 4
                 if not args.all:
                     return 3
         if failures:

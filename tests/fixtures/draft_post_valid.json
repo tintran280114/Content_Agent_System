@@ -16,7 +16,7 @@
   ],
   "metadata": {
     "provider": "groq",
-    "model": "llama-3.3-70b-versatile",
+    "model": "openai/gpt-oss-120b",
     "role": "copywriter",
     "prompt_version": "copywriter-v1.0.0",
     "provider_sdk": "fixture/1.0",

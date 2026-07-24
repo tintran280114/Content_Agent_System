@@ -11,6 +11,7 @@ class ErrorCode(str, Enum):
     AUTHENTICATION = "authentication"
     PERMISSION_DENIED = "permission_denied"
     RATE_LIMIT = "rate_limit"
+    QUOTA_EXHAUSTED = "quota_exhausted"
     TIMEOUT = "timeout"
     NETWORK = "network"
     UNAVAILABLE_MODEL = "unavailable_model"
@@ -81,14 +82,24 @@ def normalize_provider_exception(exc: Exception, *, provider: str, model: str) -
         code, safe, retryable = ErrorCode.AUTHENTICATION, "Provider rejected the credential.", False
     elif status == 403:
         code, safe, retryable = ErrorCode.PERMISSION_DENIED, "Credential has no access to this model.", False
-    elif status == 429 or "rate limit" in combined or "quota" in combined:
+    elif "quota" in combined:
+        code, safe, retryable = (
+            ErrorCode.QUOTA_EXHAUSTED,
+            "Provider quota was exhausted; retry after the provider resets it.",
+            False,
+        )
+    elif status == 429 or "rate limit" in combined:
         code, safe, retryable = ErrorCode.RATE_LIMIT, "Provider rate limit or quota was reached.", True
     elif status in {408, 504} or "timeout" in combined or "timed out" in combined:
         code, safe, retryable = ErrorCode.TIMEOUT, "Provider request timed out.", True
     elif "unavailable_model" in combined or "model_not_found" in combined or "not found" in combined:
         code, safe, retryable = ErrorCode.UNAVAILABLE_MODEL, "Configured model is unavailable.", False
     elif "content_filter" in combined or "safety" in combined or "blocked" in combined:
-        code, safe, retryable = ErrorCode.CONTENT_FILTER, "Provider blocked the response through a safety filter.", False
+        code, safe, retryable = (
+            ErrorCode.CONTENT_FILTER,
+            "Provider blocked the response through a safety filter.",
+            False,
+        )
     elif status is not None and status >= 500:
         code, safe, retryable = ErrorCode.PROVIDER, "Provider service failed temporarily.", True
     elif "connect" in combined or "network" in combined or "dns" in combined:

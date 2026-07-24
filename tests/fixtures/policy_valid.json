@@ -18,7 +18,8 @@
     "#ResponsibleAI"
   ],
   "examples": [
-    "Start small, measure outcomes, and keep a human accountable."
+    "Start small, measure outcomes, and keep a human accountable.",
+    "Treat every AI draft as a proposal that still needs a human review."
   ],
   "rubric": {
     "policy_compliance": 40,

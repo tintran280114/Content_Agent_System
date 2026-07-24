@@ -276,7 +276,11 @@ def main() -> int:
         output = args.output or DEFAULT_SMOKE_OUTPUT
     else:
         roles = selected_roles(args.provider)
-        rows = dry_run_rows(roles, args.include_fallbacks) if args.dry_run else live_rows(roles, args.include_fallbacks)
+        rows = (
+            dry_run_rows(roles, args.include_fallbacks)
+            if args.dry_run
+            else live_rows(roles, args.include_fallbacks)
+        )
         mode = "dry-run" if args.dry_run else "live"
         output = args.output or DEFAULT_OUTPUT
     write_artifact(output, mode=mode, rows=rows)

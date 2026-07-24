@@ -25,9 +25,18 @@ def fixture(name: str) -> dict:
 class SchemaTests(unittest.TestCase):
     def test_valid_fixtures(self) -> None:
         self.assertEqual(PolicyContext.model_validate(fixture("policy_valid.json")).threshold, 80)
-        self.assertEqual(ResearchBrief.model_validate(fixture("research_brief_valid.json")).metadata.provider, "gemini")
-        self.assertEqual(DraftPost.model_validate(fixture("draft_post_valid.json")).metadata.provider, "groq")
-        self.assertEqual(CriticResult.model_validate(fixture("critic_result_valid.json")).decision.value, "pass")
+        self.assertEqual(
+            ResearchBrief.model_validate(fixture("research_brief_valid.json")).metadata.provider,
+            "gemini",
+        )
+        self.assertEqual(
+            DraftPost.model_validate(fixture("draft_post_valid.json")).metadata.provider,
+            "groq",
+        )
+        self.assertEqual(
+            CriticResult.model_validate(fixture("critic_result_valid.json")).decision.value,
+            "pass",
+        )
 
     def test_invalid_fixtures_are_rejected(self) -> None:
         cases = [

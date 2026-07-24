@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -171,6 +172,8 @@ class SQLiteRunStore:
         connection = sqlite3.connect(self.database_path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute("PRAGMA synchronous = NORMAL")
         try:
             yield connection
             connection.commit()
@@ -182,12 +185,27 @@ class SQLiteRunStore:
 
     def initialize(self) -> None:
         with self._connection() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(SQLITE_SCHEMA)
             connection.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (SCHEMA_VERSION,),
             )
+
+    def backup_bytes(self) -> bytes:
+        """Return a consistent SQLite snapshot, including committed WAL data."""
+
+        with tempfile.TemporaryDirectory(prefix="content-agent-backup-") as directory:
+            backup_path = Path(directory) / "content_agent.sqlite3"
+            source = sqlite3.connect(self.database_path, timeout=30)
+            destination = sqlite3.connect(backup_path, timeout=30)
+            try:
+                source.backup(destination)
+            finally:
+                destination.close()
+                source.close()
+            return backup_path.read_bytes()
 
     def start_run(
         self,
@@ -206,7 +224,9 @@ class SQLiteRunStore:
                 (str(run_id), policy.account_id, topic, RunState.RUNNING.value, now, now),
             )
             connection.execute(
-                "INSERT INTO policies(run_id, account_id, spec_version, source_path, payload_json, created_at) "
+                "INSERT INTO policies("
+                "run_id, account_id, spec_version, source_path, payload_json, created_at"
+                ") "
                 "VALUES(?, ?, ?, ?, ?, ?)",
                 (
                     str(run_id),
@@ -508,6 +528,29 @@ class SQLiteRunStore:
             raise KeyError(f"current draft not found for run_id: {run_id}")
         return DraftPost.model_validate_json(str(row["payload_json"]))
 
+    def get_draft_revisions(self, run_id: UUID | str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT draft_id, parent_draft_id, revision, origin, payload_json, created_at
+                FROM draft_revisions
+                WHERE run_id = ?
+                ORDER BY revision
+                """,
+                (str(run_id),),
+            ).fetchall()
+        return [
+            {
+                "draft_id": str(row["draft_id"]),
+                "parent_draft_id": row["parent_draft_id"],
+                "revision": int(row["revision"]),
+                "origin": str(row["origin"]),
+                "payload": json.loads(str(row["payload_json"])),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
+
     def get_latest_critic(self, run_id: UUID | str) -> CriticResult | None:
         with self._connection() as connection:
             row = connection.execute(
@@ -515,6 +558,33 @@ class SQLiteRunStore:
                 (str(run_id),),
             ).fetchone()
         return CriticResult.model_validate_json(str(row["payload_json"])) if row else None
+
+    def get_critic_results(self, run_id: UUID | str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT critic_id, draft_id, revision, rule_passed, score, decision,
+                       rule_json, payload_json, created_at
+                FROM critic_results
+                WHERE run_id = ?
+                ORDER BY revision
+                """,
+                (str(run_id),),
+            ).fetchall()
+        return [
+            {
+                "critic_id": str(row["critic_id"]),
+                "draft_id": str(row["draft_id"]),
+                "revision": int(row["revision"]),
+                "rule_passed": bool(row["rule_passed"]),
+                "score": int(row["score"]),
+                "decision": str(row["decision"]),
+                "rule": json.loads(str(row["rule_json"])),
+                "payload": json.loads(str(row["payload_json"])),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]
 
     def next_revision_number(self, run_id: UUID | str) -> int:
         with self._connection() as connection:
@@ -646,7 +716,11 @@ class SQLiteRunStore:
                 SELECT COALESCE(SUM(input_tokens), 0) AS input_tokens,
                        COALESCE(SUM(output_tokens), 0) AS output_tokens,
                        COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                       SUM(estimated_cost_usd) AS estimated_cost_usd
+                       SUM(estimated_cost_usd) AS estimated_cost_usd,
+                       SUM(CASE WHEN state = 'started' AND provider IS NOT NULL
+                                THEN 1 ELSE 0 END) AS request_count,
+                       SUM(CASE WHEN state = 'failed' AND retryable = 1
+                                THEN 1 ELSE 0 END) AS retry_count
                 FROM run_events
                 """
             ).fetchone()
@@ -654,14 +728,72 @@ class SQLiteRunStore:
                 """
                 SELECT provider, model, SUM(input_tokens) AS input_tokens,
                        SUM(output_tokens) AS output_tokens, SUM(total_tokens) AS total_tokens,
-                       SUM(estimated_cost_usd) AS estimated_cost_usd
+                       SUM(estimated_cost_usd) AS estimated_cost_usd,
+                       SUM(CASE WHEN state = 'started' THEN 1 ELSE 0 END) AS request_count,
+                       SUM(CASE WHEN state = 'failed' AND retryable = 1
+                                THEN 1 ELSE 0 END) AS retry_count
                 FROM run_events
                 WHERE provider IS NOT NULL
                 GROUP BY provider, model
                 ORDER BY provider, model
                 """
             ).fetchall()
-        return {"total": dict(total), "by_provider": [dict(row) for row in by_provider]}
+            by_run = connection.execute(
+                """
+                SELECT r.run_id, r.account_id, r.topic,
+                       SUM(e.input_tokens) AS input_tokens,
+                       SUM(e.output_tokens) AS output_tokens,
+                       SUM(e.total_tokens) AS total_tokens,
+                       SUM(e.estimated_cost_usd) AS estimated_cost_usd,
+                       SUM(CASE WHEN e.state = 'started' AND e.provider IS NOT NULL
+                                THEN 1 ELSE 0 END) AS request_count,
+                       SUM(CASE WHEN e.state = 'failed' AND e.retryable = 1
+                                THEN 1 ELSE 0 END) AS retry_count
+                FROM runs r
+                JOIN run_events e ON e.run_id = r.run_id
+                GROUP BY r.run_id, r.account_id, r.topic
+                ORDER BY r.created_at DESC
+                """
+            ).fetchall()
+        total_payload = dict(total)
+        total_payload["retry_rate"] = self._retry_rate(total_payload)
+        provider_payloads = [dict(row) for row in by_provider]
+        run_payloads = [dict(row) for row in by_run]
+        for payload in [*provider_payloads, *run_payloads]:
+            payload["retry_rate"] = self._retry_rate(payload)
+        return {
+            "total": total_payload,
+            "by_provider": provider_payloads,
+            "by_run": run_payloads,
+        }
+
+    @staticmethod
+    def _retry_rate(payload: dict[str, Any]) -> float:
+        requests = int(payload.get("request_count") or 0)
+        retries = int(payload.get("retry_count") or 0)
+        return round(retries / requests, 4) if requests else 0.0
+
+    def model_usage(
+        self,
+        *,
+        provider: str,
+        model: str,
+        since: datetime,
+    ) -> dict[str, int]:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT SUM(CASE WHEN state = 'started' THEN 1 ELSE 0 END) AS request_count,
+                       COALESCE(SUM(total_tokens), 0) AS total_tokens
+                FROM run_events
+                WHERE provider = ? AND model = ? AND created_at >= ?
+                """,
+                (provider, model, since.isoformat()),
+            ).fetchone()
+        return {
+            "request_count": int(row["request_count"] or 0),
+            "total_tokens": int(row["total_tokens"] or 0),
+        }
 
     def upsert_evaluation_case(
         self,

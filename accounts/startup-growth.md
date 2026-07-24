@@ -35,6 +35,7 @@ English
 
 ## Examples
 - Pick one bottleneck, run one small test, and write down what changed.
+- A useful experiment starts with one measurable question, not a promise of growth.
 
 ## Rubric
 - policy_compliance: 35

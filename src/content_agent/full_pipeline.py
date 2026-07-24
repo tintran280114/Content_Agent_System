@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from enum import Enum
 from pathlib import Path
 from typing import Callable, TypeVar
 from uuid import UUID, uuid4
@@ -14,18 +15,27 @@ from .ai.errors import ProviderError
 from .ai.models import CriticResult, Decision, DraftPost, GenerationMetadata, ResearchBrief
 from .ai.registry import create_role_provider
 from .critics import RuleCritic
-from .orchestrator import PipelineContractError
 from .platform import EventState, RunStep, SQLiteRunStore
 from .policy import AccountPolicy, load_policy
-from .publisher import MockPublisher
-from .workflow import DraftOrigin, FullPipelineResult, WorkflowState
+from .publisher import MockPublisher, Publisher
+from .quota import QuotaManager
+from .workflow import DraftOrigin, PipelineResult, WorkflowState
 
 ProviderFactory = Callable[[Role], StructuredProvider]
 SleepFunction = Callable[[float], None]
 ResultT = TypeVar("ResultT", ResearchBrief, DraftPost, CriticResult)
 
 
-class FullPipelineError(RuntimeError):
+class PipelineMode(str, Enum):
+    DRAFT = "draft"
+    FULL = "full"
+
+
+class PipelineContractError(ValueError):
+    """Safe internal error for a frozen handoff mismatch."""
+
+
+class PipelineRunError(RuntimeError):
     def __init__(self, run_id: UUID, step: RunStep, code: str, message: str) -> None:
         self.run_id = run_id
         self.step = step
@@ -33,7 +43,7 @@ class FullPipelineError(RuntimeError):
         super().__init__(message)
 
 
-class FullPipelineOrchestrator:
+class PipelineOrchestrator:
     MAX_REWRITES = 2
 
     def __init__(
@@ -42,7 +52,8 @@ class FullPipelineOrchestrator:
         *,
         provider_factory: ProviderFactory = create_role_provider,
         rule_critic: RuleCritic | None = None,
-        publisher: MockPublisher | None = None,
+        publisher: Publisher | None = None,
+        quota_manager: QuotaManager | None = None,
         max_provider_attempts: int = 3,
         base_backoff_seconds: float = 1.0,
         sleeper: SleepFunction = time.sleep,
@@ -53,6 +64,7 @@ class FullPipelineOrchestrator:
         self.provider_factory = provider_factory
         self.rule_critic = rule_critic or RuleCritic()
         self.publisher = publisher or MockPublisher(store)
+        self.quota_manager = quota_manager or QuotaManager(store)
         self.max_provider_attempts = max_provider_attempts
         self.base_backoff_seconds = max(0.0, base_backoff_seconds)
         self.sleeper = sleeper
@@ -72,14 +84,21 @@ class FullPipelineOrchestrator:
         *,
         run_id: UUID,
         step: RunStep,
+        provider: StructuredProvider,
         operation: Callable[[], ResultT],
     ) -> ResultT:
         for attempt in range(1, self.max_provider_attempts + 1):
+            self.quota_manager.ensure_available(
+                provider=provider.provider_name,
+                model=provider.model,
+            )
             self.store.record_event(
                 run_id=run_id,
                 step=step,
                 state=EventState.STARTED,
                 attempt=attempt,
+                provider=provider.provider_name,
+                model=provider.model,
             )
             try:
                 result = operation()
@@ -123,10 +142,17 @@ class FullPipelineOrchestrator:
             return "contract_mismatch", str(exc), False
         return "pipeline_error", "Pipeline step failed; inspect stored events and retry.", False
 
-    def run(self, *, topic: str, policy_path: str | Path) -> FullPipelineResult:
+    def run(
+        self,
+        *,
+        topic: str,
+        policy_path: str | Path,
+        mode: PipelineMode | str = PipelineMode.FULL,
+    ) -> PipelineResult:
         normalized_topic = topic.strip()
         if not normalized_topic:
             raise ValueError("topic must not be empty")
+        normalized_mode = mode if isinstance(mode, PipelineMode) else PipelineMode(mode)
         source_path = Path(policy_path)
         policy = load_policy(source_path)
         run_id = uuid4()
@@ -151,6 +177,7 @@ class FullPipelineOrchestrator:
             research = self._provider_step(
                 run_id=run_id,
                 step=current_step,
+                provider=research_provider,
                 operation=lambda: ResearchAgent(research_provider).run(
                     topic=normalized_topic,
                     policy=policy,
@@ -168,6 +195,7 @@ class FullPipelineOrchestrator:
             current_draft = self._provider_step(
                 run_id=run_id,
                 step=current_step,
+                provider=copywriter_provider,
                 operation=lambda: CopywriterAgent(copywriter_provider).run(
                     research=research,
                     policy=policy,
@@ -185,6 +213,26 @@ class FullPipelineOrchestrator:
                 revision=0,
                 origin=DraftOrigin.INITIAL_AI.value,
             )
+            if normalized_mode == PipelineMode.DRAFT:
+                self.store.create_workflow(
+                    run_id=run_id,
+                    current_draft_id=current_draft.draft_id,
+                    state=WorkflowState.DRAFTED.value,
+                )
+                self.store.complete_run(run_id)
+                self.store.record_event(
+                    run_id=run_id,
+                    step=RunStep.RUN,
+                    state=EventState.COMPLETED,
+                )
+                return PipelineResult(
+                    run_id=run_id,
+                    mode=normalized_mode.value,
+                    policy=policy,
+                    research=research,
+                    draft=current_draft,
+                    workflow_state=WorkflowState.DRAFTED,
+                )
             self.store.create_workflow(
                 run_id=run_id,
                 current_draft_id=current_draft.draft_id,
@@ -212,6 +260,7 @@ class FullPipelineOrchestrator:
                 latest_critic = self._provider_step(
                     run_id=run_id,
                     step=current_step,
+                    provider=critic_provider,
                     operation=lambda: CriticAgent(critic_provider).run(
                         draft=current_draft,
                         policy=policy,
@@ -256,8 +305,9 @@ class FullPipelineOrchestrator:
                         step=RunStep.RUN,
                         state=EventState.COMPLETED,
                     )
-                    return FullPipelineResult(
+                    return PipelineResult(
                         run_id=run_id,
+                        mode=normalized_mode.value,
                         policy=policy,
                         research=research,
                         draft=current_draft,
@@ -287,8 +337,9 @@ class FullPipelineOrchestrator:
                         step=RunStep.RUN,
                         state=EventState.COMPLETED,
                     )
-                    return FullPipelineResult(
+                    return PipelineResult(
                         run_id=run_id,
+                        mode=normalized_mode.value,
                         policy=policy,
                         research=research,
                         draft=current_draft,
@@ -311,6 +362,7 @@ class FullPipelineOrchestrator:
                 current_draft = self._provider_step(
                     run_id=run_id,
                     step=current_step,
+                    provider=copywriter_provider,
                     operation=lambda: RewriteAgent(copywriter_provider).run(
                         research=research,
                         draft=previous_draft,
@@ -385,14 +437,17 @@ class FullPipelineOrchestrator:
                     error_message=message,
                     retryable=retryable,
                 )
-                return FullPipelineResult(
+                return PipelineResult(
                     run_id=run_id,
+                    mode=normalized_mode.value,
                     policy=policy,
                     research=research,
                     draft=current_draft,
                     critic=latest_critic,
                     workflow_state=WorkflowState.HUMAN_REVIEW,
                     rewrite_count=rewrite_count,
+                    terminal_error_code=code,
+                    terminal_error_message=message,
                 )
 
             self.store.fail_run(run_id, error_code=code, error_message=message)
@@ -404,4 +459,4 @@ class FullPipelineOrchestrator:
                 error_message=message,
                 retryable=retryable,
             )
-            raise FullPipelineError(run_id, current_step, code, message) from exc
+            raise PipelineRunError(run_id, current_step, code, message) from exc

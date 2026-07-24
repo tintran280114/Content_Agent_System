@@ -26,7 +26,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database", type=Path, default=ROOT / "artifacts" / "evaluation.sqlite3")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "evaluation_report.json")
     parser.add_argument("--limit", type=int, help="Run only the first N cases for a smoke check.")
-    parser.add_argument("--no-resume", action="store_true", help="Rerun cases instead of skipping completed ones.")
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Rerun cases instead of skipping completed ones.",
+    )
     return parser.parse_args()
 
 

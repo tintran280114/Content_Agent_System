@@ -21,13 +21,22 @@ class ConnectError(Exception):
 class ErrorTests(unittest.TestCase):
     def test_rate_limit_is_retryable_and_safe(self) -> None:
         error = normalize_provider_exception(
-            FakeHttpError(429, {"message": "quota exceeded"}),
+            FakeHttpError(429, {"message": "rate limit exceeded"}),
             provider="groq",
             model="model",
         )
         self.assertEqual(error.code, ErrorCode.RATE_LIMIT)
         self.assertTrue(error.retryable)
         self.assertNotIn("unsafe", str(error))
+
+    def test_provider_daily_quota_is_non_retryable(self) -> None:
+        error = normalize_provider_exception(
+            FakeHttpError(429, {"message": "daily quota exhausted"}),
+            provider="gemini",
+            model="model",
+        )
+        self.assertEqual(error.code, ErrorCode.QUOTA_EXHAUSTED)
+        self.assertFalse(error.retryable)
 
     def test_permission_is_not_retryable(self) -> None:
         error = normalize_provider_exception(

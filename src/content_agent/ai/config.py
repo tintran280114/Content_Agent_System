@@ -47,10 +47,13 @@ DEFAULT_ROUTES: dict[Role, ModelRoute] = {
         provider="groq",
         credential_env="GROQ_API_KEY",
         model_env="GROQ_MODEL",
-        primary_model="llama-3.3-70b-versatile",
+        primary_model="openai/gpt-oss-120b",
         fallback_models=("qwen/qwen3.6-27b",),
         free_tier_note="Groq Free Plan, subject to the organization Limits page.",
-        lifecycle_note="Primary model is scheduled for shutdown on 2026-08-16; migrate to the fallback after the sprint.",
+        lifecycle_note=(
+            "Migrated from llama-3.3-70b-versatile before its free/developer "
+            "shutdown on 2026-08-16."
+        ),
     ),
     Role.CRITIC: ModelRoute(
         role=Role.CRITIC,

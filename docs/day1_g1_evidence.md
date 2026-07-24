@@ -4,10 +4,10 @@
 |---|---|---|
 | Three differentiated Markdown policies | `accounts/*.md`, excluding template | `test_three_differentiated_account_policies_parse` |
 | File/section-specific parser failures | `content_agent.policy.PolicyParseError` | invalid-section and rubric tests |
-| Tài policy consumed by Trọng interfaces | `Day1Orchestrator` passes `AccountPolicy` to both agents | policy compatibility + orchestrator tests |
+| Tài policy consumed by Trọng interfaces | `PipelineOrchestrator(mode=draft)` passes `AccountPolicy` to both agents | policy compatibility + orchestrator tests |
 | Strict ResearchBrief/DraftPost contracts | `content_agent.ai.models` | schema fixtures and provider adapter tests |
 | Frozen run states and SQLite schema | `platform/contracts.py`, `platform/storage.py` | success/failure integration tests |
-| One shared run_id and linked artifacts | `Day1Orchestrator.run()` | `test_vertical_slice_persists_every_contract_under_one_run_id` |
+| One shared run_id and linked artifacts | `PipelineOrchestrator.run(mode=draft)` | `test_vertical_slice_persists_every_contract_under_one_run_id` |
 | Actionable safe provider failure | normalized `ProviderError` -> failed events/run | rate-limit integration + security tests |
 | CLI and account discovery | `run.py` | help/list/missing-policy CLI tests |
 | Minimal CI | `.github/workflows/ci.yml` | same offline commands as local verification |

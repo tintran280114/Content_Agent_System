@@ -34,6 +34,7 @@ English
 
 ## Examples
 - Start small, measure outcomes, and keep a human accountable.
+- Treat every AI draft as a proposal that still needs evidence and an owner.
 
 ## Rubric
 - policy_compliance: 40

@@ -20,7 +20,7 @@ class GroqProvider(StructuredProvider):
         self,
         *,
         api_key: str | None,
-        model: str = "llama-3.3-70b-versatile",
+        model: str = "openai/gpt-oss-120b",
         client: object | None = None,
         timeout_seconds: float = 45.0,
     ) -> None:

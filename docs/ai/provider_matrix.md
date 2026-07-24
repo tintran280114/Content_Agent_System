@@ -6,13 +6,13 @@ production SLA. Free quotas and catalogs can change without notice.
 | Role | Provider | Primary model | Fallback | Structured-output strategy | Free-tier status |
 |---|---|---|---|---|---|
 | Research | Gemini Developer API | `gemini-3.1-flash-lite` | `gemini-3.5-flash` | Gemini JSON schema + local Pydantic validation | Input/output free on the free tier; grounding is disabled in this implementation |
-| Copywriter | Groq Free Plan | `llama-3.3-70b-versatile` | `qwen/qwen3.6-27b` | JSON object mode + local Pydantic validation | Free Plan: 30 RPM, 1,000 RPD, 12K TPM and 100K TPD for the primary model |
+| Copywriter | Groq Free Plan | `openai/gpt-oss-120b` | `qwen/qwen3.6-27b` | JSON object mode + local Pydantic validation | Production model; quota is controlled by the organization Limits page |
 | LLM Critic spike | GitHub Models | `openai/gpt-4o-mini` | `openai/gpt-4.1-mini` | JSON object mode + local Pydantic validation | Included free, rate-limited prototyping usage |
 
-Important lifecycle note: Groq has announced that
-`llama-3.3-70b-versatile` shuts down for free/developer tiers on 16 August
-2026. It remains the sprint-plan primary for the Wednesday demo; migrate to the
-pinned Qwen fallback after the sprint.
+Lifecycle update: Groq announced that `llama-3.3-70b-versatile` shuts down for
+free/developer tiers on 16 August 2026. The runtime default was migrated to
+Groq's recommended production model `openai/gpt-oss-120b`; the original model
+name is retained only in historical live-evidence rows below.
 
 Cost controls in this implementation:
 
@@ -46,8 +46,9 @@ decides to version acceptance evidence.
 
 ## Live validation result
 
-Primary routes were validated at `2026-07-21T08:30:42Z` using one request per
-provider. Credential values were neither printed nor written to evidence.
+The pre-migration primary routes were validated at `2026-07-21T08:30:42Z`
+using one request per provider. Credential values were neither printed nor
+written to evidence. A new live smoke run is required for the GPT-OSS route.
 
 | Role | Provider/model | Result | Input | Output | Total | Latency |
 |---|---|---:|---:|---:|---:|---:|

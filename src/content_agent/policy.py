@@ -59,7 +59,7 @@ class AccountPolicy(StrictModel):
     constraints: list[str] = Field(min_length=1)
     banned_terms: list[str] = Field(default_factory=list)
     required_hashtags: list[str] = Field(default_factory=list)
-    examples: list[str] = Field(min_length=1)
+    examples: list[str] = Field(min_length=2, max_length=3)
     rubric: dict[str, int] = Field(min_length=1)
     threshold: int = Field(ge=0, le=100)
     max_length: int = Field(ge=1, le=10_000)
@@ -99,7 +99,11 @@ class AccountPolicy(StrictModel):
                 details.append(f"missing roles: {', '.join(missing)}")
             if extra:
                 details.append(f"unknown roles: {', '.join(extra)}")
-            raise ValueError("model route must define exactly research/copywriter/critic (" + "; ".join(details) + ")")
+            raise ValueError(
+                "model route must define exactly research/copywriter/critic ("
+                + "; ".join(details)
+                + ")"
+            )
         if any(not provider.strip() for provider in self.model_route.values()):
             raise ValueError("model route providers must not be empty")
         if self.model_route["copywriter"].casefold() == self.model_route["critic"].casefold():

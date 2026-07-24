@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: scheduled-content-batch
@@ -26,9 +27,15 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.1-flash-lite
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      GROQ_MODEL: llama-3.3-70b-versatile
+      GROQ_MODEL: openai/gpt-oss-120b
       GITHUB_MODELS_TOKEN: ${{ secrets.GITHUB_MODELS_TOKEN }}
       GITHUB_MODELS_MODEL: openai/gpt-4o-mini
+      CONTENT_AGENT_GEMINI_MAX_REQUESTS_PER_DAY: 100
+      CONTENT_AGENT_GEMINI_MAX_TOKENS_PER_DAY: 100000
+      CONTENT_AGENT_GROQ_MAX_REQUESTS_PER_DAY: 300
+      CONTENT_AGENT_GROQ_MAX_TOKENS_PER_DAY: 100000
+      CONTENT_AGENT_GITHUB_MODELS_MAX_REQUESTS_PER_DAY: 100
+      CONTENT_AGENT_GITHUB_MODELS_MAX_TOKENS_PER_DAY: 100000
       BATCH_TOPIC: ${{ inputs.topic || 'How small teams can use AI responsibly for social content' }}
     steps:
       - uses: actions/checkout@v4
@@ -38,13 +45,31 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+      - name: Restore the latest SQLite snapshot when available
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          prior_run_id="$(gh run list --workflow batch.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+          if [[ -n "$prior_run_id" ]]; then
+            restore_dir="${RUNNER_TEMP}/content-agent-restore"
+            mkdir -p "$restore_dir"
+            if gh run download "$prior_run_id" --name content-agent-latest --dir "$restore_dir" \
+              && [[ -f "$restore_dir/content_agent.sqlite3" ]]; then
+              mkdir -p artifacts
+              cp "$restore_dir/content_agent.sqlite3" artifacts/content_agent.sqlite3
+            else
+              echo "No reusable snapshot found; starting a new SQLite file."
+            fi
+          fi
       - name: Run all accounts through the full pipeline
         run: python run.py --all --pipeline full --topic "$BATCH_TOPIC" --database artifacts/content_agent.sqlite3
       - name: Upload SQLite and generated evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: content-agent-snapshot-${{ github.run_id }}
-          path: artifacts/
+          name: content-agent-latest
+          path: artifacts/content_agent.sqlite3
           if-no-files-found: warn
           retention-days: 14

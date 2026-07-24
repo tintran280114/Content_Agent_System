@@ -30,6 +30,7 @@ English
 
 ## Examples
 - Add one short example that demonstrates the desired style.
+- Add a second example so the model can distinguish the account voice.
 
 ## Rubric
 - policy_compliance: 40

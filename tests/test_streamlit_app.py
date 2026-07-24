@@ -33,6 +33,16 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertEqual(list(app.exception), [])
                 self.assertEqual(app.title[0].value, "Social Content Operations")
                 self.assertTrue(any("No run data yet" in info.value for info in app.info))
+                self.assertFalse(any(field.label == "SQLite path" for field in app.text_input))
+                self.assertEqual(len(app.file_uploader), 1)
+                labels = [tab.label for tab in app.tabs]
+                self.assertIn("Human review", labels)
+                self.assertIn("Scores & usage", labels)
+                self.assertNotIn("Run batch", labels)
+                self.assertNotIn("Evidence", labels)
+                source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+                self.assertNotIn("PipelineOrchestrator", source)
+                self.assertNotIn("BatchService", source)
         finally:
             if previous is None:
                 os.environ.pop("CONTENT_AGENT_DB", None)
@@ -109,7 +119,8 @@ class StreamlitAppTests(unittest.TestCase):
                     default_timeout=15,
                 ).run()
                 self.assertEqual(list(app.exception), [])
-                self.assertEqual(app.selectbox[0].value, str(run_id))
+                review_select = next(box for box in app.selectbox if box.label == "Review item")
+                self.assertEqual(review_select.value, str(run_id))
                 self.assertTrue(any(draft.content in area.value for area in app.text_area))
         finally:
             if previous is None:

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Literal, Sequence
+from uuid import uuid4
 
 import _bootstrap  # noqa: F401
 
@@ -11,9 +12,11 @@ from content_agent.ai.base import ChatMessage, ProviderResponse, SchemaT, Struct
 from content_agent.ai.config import Role
 from content_agent.ai.errors import ErrorCode, ProviderError
 from content_agent.ai.models import GenerationMetadata, TokenUsage
-from content_agent.full_pipeline import FullPipelineError, FullPipelineOrchestrator
-from content_agent.platform import SQLiteRunStore
-from content_agent.publisher import MockPublisher
+from content_agent.orchestrator import PipelineOrchestrator, PipelineRunError
+from content_agent.platform import EventState, RunStep, SQLiteRunStore
+from content_agent.policy import load_policy
+from content_agent.publisher import MockPublisher, Publisher
+from content_agent.quota import QuotaBudget, QuotaManager
 from content_agent.review import ReviewService
 from content_agent.workflow import PublishStatus, WorkflowState
 
@@ -104,7 +107,8 @@ class FullPipelineTests(unittest.TestCase):
         critics: list[dict | Exception],
         research_responses: list[dict | Exception] | None = None,
         sleep_calls: list[float] | None = None,
-    ) -> tuple[FullPipelineOrchestrator, dict[Role, SequenceProvider]]:
+        quota_manager: QuotaManager | None = None,
+    ) -> tuple[PipelineOrchestrator, dict[Role, SequenceProvider]]:
         providers = {
             Role.RESEARCH: SequenceProvider(
                 "gemini", "gemini-test", research_responses or [RESEARCH]
@@ -112,11 +116,12 @@ class FullPipelineTests(unittest.TestCase):
             Role.COPYWRITER: SequenceProvider("groq", "groq-test", drafts),
             Role.CRITIC: SequenceProvider("github_models", "github-test", critics),
         }
-        orchestrator = FullPipelineOrchestrator(
+        orchestrator = PipelineOrchestrator(
             self.store,
             provider_factory=lambda role: providers[role],
             base_backoff_seconds=0.25,
             sleeper=(sleep_calls.append if sleep_calls is not None else lambda _: None),
+            quota_manager=quota_manager,
         )
         return orchestrator, providers
 
@@ -177,6 +182,74 @@ class FullPipelineTests(unittest.TestCase):
         self.assertEqual(failed[0]["error_code"], "rate_limit")
         self.assertEqual(failed[0]["retryable"], 1)
 
+    def test_application_quota_stops_before_a_second_provider_request(self) -> None:
+        error = ProviderError(
+            ErrorCode.RATE_LIMIT,
+            "Provider rate limit or quota was reached.",
+            provider="gemini",
+            model="gemini-test",
+            retryable=True,
+            status_code=429,
+        )
+        budgets = {
+            "gemini": QuotaBudget(1, 100_000),
+            "groq": QuotaBudget(10, 100_000),
+            "github_models": QuotaBudget(10, 100_000),
+        }
+        orchestrator, providers = self.orchestrator(
+            drafts=[DRAFT],
+            critics=[PASS],
+            research_responses=[error, RESEARCH],
+            quota_manager=QuotaManager(self.store, budgets=budgets),
+        )
+
+        with self.assertRaises(PipelineRunError) as caught:
+            orchestrator.run(topic="Responsible AI", policy_path=FIXTURES / "policy_valid.md")
+
+        self.assertEqual(caught.exception.code, "quota_exhausted")
+        self.assertEqual(providers[Role.RESEARCH].calls, 1)
+        events = self.store.get_events(caught.exception.run_id)
+        self.assertEqual(
+            sum(event["state"] == "started" and event["provider"] == "gemini" for event in events),
+            1,
+        )
+
+    def test_quota_exhaustion_after_a_draft_stops_batch_safely(self) -> None:
+        prior_run = uuid4()
+        self.store.start_run(
+            run_id=prior_run,
+            topic="Prior usage",
+            policy=load_policy(FIXTURES / "policy_valid.md"),
+            source_path=FIXTURES / "policy_valid.md",
+        )
+        self.store.record_event(
+            run_id=prior_run,
+            step=RunStep.LLM_CRITIC,
+            state=EventState.STARTED,
+            provider="github_models",
+            model="github-test",
+        )
+        self.store.complete_run(prior_run)
+        budgets = {
+            "gemini": QuotaBudget(10, 100_000),
+            "groq": QuotaBudget(10, 100_000),
+            "github_models": QuotaBudget(1, 100_000),
+        }
+        orchestrator, providers = self.orchestrator(
+            drafts=[DRAFT],
+            critics=[PASS],
+            quota_manager=QuotaManager(self.store, budgets=budgets),
+        )
+
+        result = orchestrator.run(
+            topic="Responsible AI",
+            policy_path=FIXTURES / "policy_valid.md",
+        )
+
+        self.assertEqual(result.workflow_state, WorkflowState.HUMAN_REVIEW)
+        self.assertEqual(result.terminal_error_code, "quota_exhausted")
+        self.assertEqual(providers[Role.CRITIC].calls, 0)
+
     def test_critic_provider_failure_routes_existing_draft_to_human_review(self) -> None:
         error = ProviderError(
             ErrorCode.MISSING_CREDENTIAL,
@@ -204,8 +277,8 @@ class FullPipelineTests(unittest.TestCase):
                 raise error
             raise AssertionError("No later provider should be created")
 
-        orchestrator = FullPipelineOrchestrator(self.store, provider_factory=factory)
-        with self.assertRaises(FullPipelineError) as caught:
+        orchestrator = PipelineOrchestrator(self.store, provider_factory=factory)
+        with self.assertRaises(PipelineRunError) as caught:
             orchestrator.run(topic="Responsible AI", policy_path=FIXTURES / "policy_valid.md")
         run = self.store.get_run(caught.exception.run_id)
         self.assertEqual(run["state"], "failed")
@@ -284,6 +357,9 @@ class FullPipelineTests(unittest.TestCase):
         receipt = MockPublisher(self.store).publish(result.run_id)
         self.assertEqual(receipt.status, PublishStatus.BLOCKED)
         self.assertEqual(self.store.get_workflow(result.run_id)["state"], "rejected")
+
+    def test_mock_publisher_satisfies_swappable_publisher_contract(self) -> None:
+        self.assertIsInstance(MockPublisher(self.store), Publisher)
 
 
 if __name__ == "__main__":

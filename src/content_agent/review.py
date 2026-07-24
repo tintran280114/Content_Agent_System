@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from .critics import RuleCritic
 from .platform import SQLiteRunStore
-from .publisher import MockPublisher
+from .publisher import MockPublisher, Publisher
 from .workflow import DraftOrigin, PublishReceipt, ReviewActionType, WorkflowState
 
 
@@ -15,7 +15,7 @@ class ReviewService:
         self,
         store: SQLiteRunStore,
         *,
-        publisher: MockPublisher | None = None,
+        publisher: Publisher | None = None,
         rule_critic: RuleCritic | None = None,
     ) -> None:
         self.store = store

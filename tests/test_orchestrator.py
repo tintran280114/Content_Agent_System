@@ -11,7 +11,7 @@ from content_agent.ai.base import ChatMessage, ProviderResponse, SchemaT, Struct
 from content_agent.ai.config import Role
 from content_agent.ai.errors import ErrorCode, ProviderError
 from content_agent.ai.models import GenerationMetadata, TokenUsage
-from content_agent.orchestrator import Day1Orchestrator, Day1RunError
+from content_agent.orchestrator import PipelineMode, PipelineOrchestrator, PipelineRunError
 from content_agent.platform import SQLiteRunStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -84,15 +84,21 @@ class OrchestratorTests(unittest.TestCase):
             Role.RESEARCH: FakeProvider("gemini", "gemini-test", self.research_payload),
             Role.COPYWRITER: FakeProvider("groq", "groq-test", self.draft_payload),
         }
-        result = Day1Orchestrator(
+        result = PipelineOrchestrator(
             self.store,
             provider_factory=lambda role: providers[role],
-        ).run(topic="Responsible AI", policy_path=FIXTURES / "policy_valid.md")
+        ).run(
+            topic="Responsible AI",
+            policy_path=FIXTURES / "policy_valid.md",
+            mode=PipelineMode.DRAFT,
+        )
 
         run = self.store.get_run(result.run_id)
         self.assertIsNotNone(run)
         self.assertEqual(run["state"], "completed")
         self.assertEqual(run["account_id"], result.policy.account_id)
+        self.assertEqual(result.mode, "draft")
+        self.assertEqual(result.workflow_state.value, "drafted")
         self.assertEqual(result.draft.brief_id, result.research.brief_id)
 
         artifacts = self.store.get_artifacts(result.run_id)
@@ -115,11 +121,16 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(sum(event["total_tokens"] for event in events), 40)
 
     def test_provider_failure_is_safe_and_traceable(self) -> None:
-        with self.assertRaises(Day1RunError) as caught:
-            Day1Orchestrator(
+        with self.assertRaises(PipelineRunError) as caught:
+            PipelineOrchestrator(
                 self.store,
                 provider_factory=lambda role: FailingProvider(),
-            ).run(topic="Responsible AI", policy_path=FIXTURES / "policy_valid.md")
+                max_provider_attempts=1,
+            ).run(
+                topic="Responsible AI",
+                policy_path=FIXTURES / "policy_valid.md",
+                mode=PipelineMode.DRAFT,
+            )
 
         error = caught.exception
         self.assertEqual(error.code, "rate_limit")
@@ -142,11 +153,15 @@ class OrchestratorTests(unittest.TestCase):
             Role.COPYWRITER: FakeProvider("groq", "groq-test", self.draft_payload),
         }
 
-        with self.assertRaises(Day1RunError) as caught:
-            Day1Orchestrator(
+        with self.assertRaises(PipelineRunError) as caught:
+            PipelineOrchestrator(
                 self.store,
                 provider_factory=lambda role: providers[role],
-            ).run(topic="Responsible AI", policy_path=policy_path)
+            ).run(
+                topic="Responsible AI",
+                policy_path=policy_path,
+                mode=PipelineMode.DRAFT,
+            )
 
         error = caught.exception
         self.assertEqual(error.code, "contract_mismatch")

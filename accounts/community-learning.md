@@ -34,6 +34,7 @@ English
 
 ## Examples
 - AI is a tool that predicts patterns; people still choose the goals and check the result.
+- Before sharing an AI answer, ask what evidence supports it and what might be missing.
 
 ## Rubric
 - policy_compliance: 35

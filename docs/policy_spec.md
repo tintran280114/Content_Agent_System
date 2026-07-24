@@ -11,8 +11,8 @@ Every file must contain these level-two headings exactly once:
    `- spec_version: 0.1`.
 2. `## Goal`, `## Audience`, `## Platform`, `## Tone`, and `## Language`, each
    containing non-empty plain text.
-3. `## Constraints` and `## Examples`, each containing one or more `- value`
-   bullets.
+3. `## Constraints` contains one or more `- value` bullets. `## Examples`
+   contains two or three voice-example bullets.
 4. `## Rubric` containing `- criterion: integer-weight` bullets whose weights
    total 100.
 5. `## Threshold` containing an integer from 0 through 100.

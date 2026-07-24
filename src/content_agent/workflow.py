@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import Field
@@ -12,6 +13,7 @@ from .policy import AccountPolicy
 
 
 class WorkflowState(str, Enum):
+    DRAFTED = "drafted"
     DRAFTING = "drafting"
     CRITIQUING = "critiquing"
     REWRITING = "rewriting"
@@ -48,8 +50,9 @@ class PublishReceipt(StrictModel):
     reason: str = Field(min_length=1)
 
 
-class FullPipelineResult(StrictModel):
+class PipelineResult(StrictModel):
     run_id: UUID
+    mode: Literal["draft", "full"]
     policy: AccountPolicy
     research: ResearchBrief
     draft: DraftPost
@@ -57,3 +60,5 @@ class FullPipelineResult(StrictModel):
     workflow_state: WorkflowState
     rewrite_count: int = Field(default=0, ge=0, le=2)
     publish_receipt: PublishReceipt | None = None
+    terminal_error_code: str | None = None
+    terminal_error_message: str | None = None

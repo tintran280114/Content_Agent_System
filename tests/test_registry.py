@@ -14,6 +14,12 @@ class RegistryTests(unittest.TestCase):
             DEFAULT_ROUTES[Role.CRITIC].provider,
         )
 
+    def test_copywriter_default_avoids_announced_groq_shutdown(self) -> None:
+        self.assertEqual(
+            DEFAULT_ROUTES[Role.COPYWRITER].primary_model,
+            "openai/gpt-oss-120b",
+        )
+
     def test_all_routes_have_fallbacks_and_credentials(self) -> None:
         for role, route in DEFAULT_ROUTES.items():
             with self.subTest(role=role.value):

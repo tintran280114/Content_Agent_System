@@ -1,6 +1,6 @@
 # AI-01 Day 1 integrated handoff
 
-Trọng's structured AI interfaces are consumed by `Day1Orchestrator` without an
+Trọng's structured AI interfaces are consumed by `PipelineOrchestrator` in draft mode without an
 adapter shim. Tài's canonical `AccountPolicy` is normalized by
 `PolicyContext.from_policy()` for prompt construction, while Tín's platform
 persists the complete policy object.
