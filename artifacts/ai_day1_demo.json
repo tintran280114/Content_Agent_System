@@ -1,0 +1,84 @@
+{
+  "research": {
+    "summary": "Small teams can leverage AI to scale content production by focusing on human-in-the-loop workflows, data privacy, and iterative testing rather than full automation.",
+    "key_points": [
+      "AI should serve as a drafting assistant, not a final content creator.",
+      "Human oversight is essential to maintain brand voice and factual accuracy.",
+      "Data privacy and copyright considerations remain critical for small businesses.",
+      "Start with low-risk tasks like brainstorming or summarizing rather than high-stakes public communications."
+    ],
+    "audience_insights": [
+      "Startup founders prioritize efficiency but fear brand dilution.",
+      "Content leads are concerned about the ethical implications of AI-generated content.",
+      "Time-strapped teams need actionable, low-friction implementation strategies."
+    ],
+    "content_angles": [
+      "A step-by-step guide to building a human-in-the-loop content workflow.",
+      "How to audit AI tools for data privacy before integration.",
+      "The importance of transparency when using AI in social media posts.",
+      "Balancing AI speed with the need for authentic human connection."
+    ],
+    "risks": [
+      "Over-reliance on AI leading to generic or hallucinated content.",
+      "Potential legal and copyright issues regarding AI-generated assets.",
+      "Loss of audience trust if AI usage is not transparent.",
+      "Data leakage when using public AI models for proprietary strategy."
+    ],
+    "source_notes": [
+      "This brief is based on general industry knowledge regarding AI ethics and operational best practices for small teams.",
+      "No specific proprietary data was accessed; recommendations reflect current standard practices for responsible AI adoption."
+    ],
+    "brief_id": "20c527d3-9b19-4e01-9d39-188bf8e7a8df",
+    "topic": "How small teams can use AI responsibly for social content",
+    "account_id": "responsible-ai-lab",
+    "metadata": {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "role": "research",
+      "prompt_version": "research-v1.0.0",
+      "provider_sdk": "google-genai/2.12.1",
+      "latency_ms": 2328,
+      "usage": {
+        "input_tokens": 350,
+        "output_tokens": 375,
+        "total_tokens": 725,
+        "estimated_cost_usd": null
+      },
+      "request_id": "NTFfaoCCB9fKjuMPoq3u8Aw",
+      "generated_at": "2026-07-21T08:43:23.280798Z"
+    }
+  },
+  "draft": {
+    "content": "For small teams, AI can aid content creation by supporting human-in-the-loop workflows. Start with low-risk tasks and maintain human oversight to ensure brand voice and factual accuracy.",
+    "hashtags": [
+      "#ResponsibleAI"
+    ],
+    "call_to_action": "",
+    "policy_constraints_applied": [
+      "Do not promise guaranteed business results",
+      "State uncertainty when evidence is limited",
+      "Keep the post under 900 characters"
+    ],
+    "draft_id": "49f23eea-b5e6-4adb-b241-f9b54a95246e",
+    "brief_id": "20c527d3-9b19-4e01-9d39-188bf8e7a8df",
+    "topic": "How small teams can use AI responsibly for social content",
+    "account_id": "responsible-ai-lab",
+    "platform": "LinkedIn",
+    "metadata": {
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "role": "copywriter",
+      "prompt_version": "copywriter-v1.0.0",
+      "provider_sdk": "groq/1.5.0",
+      "latency_ms": 883,
+      "usage": {
+        "input_tokens": 1061,
+        "output_tokens": 99,
+        "total_tokens": 1160,
+        "estimated_cost_usd": null
+      },
+      "request_id": "chatcmpl-160a5ce7-61f7-4e2c-9e29-b5ca44550d0b",
+      "generated_at": "2026-07-21T08:43:24.166291Z"
+    }
+  }
+}

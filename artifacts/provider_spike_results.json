@@ -1,0 +1,187 @@
+{
+  "generated_at": "2026-07-22T09:15:46.135728+00:00",
+  "mode": "live",
+  "free_tier_expected": true,
+  "results": [
+    {
+      "status": "passed",
+      "role": "research",
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "schema": "ResearchBrief",
+      "metadata": {
+        "provider": "gemini",
+        "model": "gemini-3.1-flash-lite",
+        "role": "research",
+        "prompt_version": "research-v1.0.0",
+        "provider_sdk": "google-genai/2.12.1",
+        "latency_ms": 2420,
+        "usage": {
+          "input_tokens": 367,
+          "output_tokens": 330,
+          "total_tokens": 697,
+          "estimated_cost_usd": null
+        },
+        "request_id": "R4pgapPdJKH4juMP1szumAY",
+        "generated_at": "2026-07-22T09:15:39.089097Z"
+      },
+      "sample": {
+        "summary": "Small teams can effectively leverage AI for social content by implementing human-in-the-loop workflows that prioritize accuracy, brand consistency, and ethical oversight without over-relying on automation.",
+        "key_points": [
+          "AI should function as a drafting assistant rather than an autonomous content creator.",
+          "Human review is essential to verify facts and maintain brand voice.",
+          "Data privacy and intellectual property concerns require careful handling of inputs.",
+          "Small teams benefit most from iterative testing rather than full-scale automation."
+        ],
+        "audience_insights": [
+          "Startup founders prioritize efficiency but fear brand dilution.",
+          "Content leads are concerned about the legal implications of AI-generated assets.",
+          "The audience values actionable frameworks over hype-driven marketing advice."
+        ],
+        "content_angles": [
+          "The 'Human-in-the-Loop' checklist for daily social media workflows.",
+          "How to audit AI-generated content for bias and factual accuracy.",
+          "Balancing speed and quality: A practical guide for lean teams."
+        ],
+        "risks": [
+          "Over-reliance on AI leading to generic or hallucinated content.",
+          "Potential copyright infringement from training data sources.",
+          "Loss of authentic brand voice due to excessive automation."
+        ],
+        "source_notes": [
+          "Brief based on general industry best practices for AI governance.",
+          "Insights derived from current trends in responsible AI implementation for small businesses."
+        ],
+        "brief_id": "78515879-42d3-41d4-9874-83f5ac2fb0c8",
+        "topic": "How small teams can use AI responsibly for social content",
+        "account_id": "responsible-ai-lab",
+        "metadata": {
+          "provider": "gemini",
+          "model": "gemini-3.1-flash-lite",
+          "role": "research",
+          "prompt_version": "research-v1.0.0",
+          "provider_sdk": "google-genai/2.12.1",
+          "latency_ms": 2420,
+          "usage": {
+            "input_tokens": 367,
+            "output_tokens": 330,
+            "total_tokens": 697,
+            "estimated_cost_usd": null
+          },
+          "request_id": "R4pgapPdJKH4juMP1szumAY",
+          "generated_at": "2026-07-22T09:15:39.089097Z"
+        }
+      },
+      "route": "primary"
+    },
+    {
+      "status": "passed",
+      "role": "copywriter",
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "schema": "DraftPost",
+      "metadata": {
+        "provider": "groq",
+        "model": "openai/gpt-oss-120b",
+        "role": "copywriter",
+        "prompt_version": "copywriter-v1.0.0",
+        "provider_sdk": "groq/1.5.0",
+        "latency_ms": 2307,
+        "usage": {
+          "input_tokens": 918,
+          "output_tokens": 656,
+          "total_tokens": 1574,
+          "estimated_cost_usd": null
+        },
+        "request_id": "chatcmpl-4f54375a-a156-4ebe-9ae3-c718d4a5df10",
+        "generated_at": "2026-07-22T09:15:41.406636Z"
+      },
+      "sample": {
+        "content": "🛠️ A quick three‑step checklist for small teams using AI in social content:\n\n1️⃣ Define written constraints before prompting the model.\n2️⃣ Assign a human reviewer who owns the final post.\n3️⃣ Track quality and failures against a fixed evaluation set each week.\n\nThis keeps the workflow auditable and the AI output accountable.",
+        "hashtags": [
+          "#ResponsibleAI"
+        ],
+        "call_to_action": "Try the checklist on your next post and let us know how it works.",
+        "policy_constraints_applied": [
+          "Do not promise guaranteed business results",
+          "State uncertainty when evidence is limited",
+          "Keep post under 900 characters",
+          "Avoid banned terms",
+          "Include required hashtag"
+        ],
+        "draft_id": "5ab86e4e-dcd1-4f97-82d5-837865f05eed",
+        "brief_id": "11111111-1111-4111-8111-111111111111",
+        "topic": "How small teams can use AI responsibly for social content",
+        "account_id": "responsible-ai-lab",
+        "platform": "LinkedIn",
+        "metadata": {
+          "provider": "groq",
+          "model": "openai/gpt-oss-120b",
+          "role": "copywriter",
+          "prompt_version": "copywriter-v1.0.0",
+          "provider_sdk": "groq/1.5.0",
+          "latency_ms": 2307,
+          "usage": {
+            "input_tokens": 918,
+            "output_tokens": 656,
+            "total_tokens": 1574,
+            "estimated_cost_usd": null
+          },
+          "request_id": "chatcmpl-4f54375a-a156-4ebe-9ae3-c718d4a5df10",
+          "generated_at": "2026-07-22T09:15:41.406636Z"
+        }
+      },
+      "route": "primary"
+    },
+    {
+      "status": "passed",
+      "role": "critic",
+      "provider": "github_models",
+      "model": "openai/gpt-4o-mini",
+      "schema": "CriticResult",
+      "metadata": {
+        "provider": "github_models",
+        "model": "openai/gpt-4o-mini",
+        "role": "critic",
+        "prompt_version": "critic-probe-v1.0.0",
+        "provider_sdk": "openai/2.46.0",
+        "latency_ms": 4717,
+        "usage": {
+          "input_tokens": 842,
+          "output_tokens": 37,
+          "total_tokens": 879,
+          "estimated_cost_usd": null
+        },
+        "request_id": "chatcmpl-E4NLSSQYdMLXgnc37sspwKBMUcQv1",
+        "generated_at": "2026-07-22T09:15:46.135728Z"
+      },
+      "sample": {
+        "rule_passed": true,
+        "score": 85,
+        "violations": [],
+        "suggestions": [],
+        "decision": "pass",
+        "critic_id": "0060b063-a57b-4cde-a88f-7e4be500d95b",
+        "draft_id": "22222222-2222-4222-8222-222222222222",
+        "account_id": "responsible-ai-lab",
+        "metadata": {
+          "provider": "github_models",
+          "model": "openai/gpt-4o-mini",
+          "role": "critic",
+          "prompt_version": "critic-probe-v1.0.0",
+          "provider_sdk": "openai/2.46.0",
+          "latency_ms": 4717,
+          "usage": {
+            "input_tokens": 842,
+            "output_tokens": 37,
+            "total_tokens": 879,
+            "estimated_cost_usd": null
+          },
+          "request_id": "chatcmpl-E4NLSSQYdMLXgnc37sspwKBMUcQv1",
+          "generated_at": "2026-07-22T09:15:46.135728Z"
+        }
+      },
+      "route": "primary"
+    }
+  ]
+}

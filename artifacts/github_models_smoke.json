@@ -1,0 +1,42 @@
+{
+  "generated_at": "2026-07-21T09:26:43.597566+00:00",
+  "mode": "github-smoke",
+  "free_tier_expected": true,
+  "results": [
+    {
+      "status": "passed",
+      "role": "github_smoke",
+      "provider": "github_models",
+      "model": "openai/gpt-4o-mini",
+      "route": "primary",
+      "schema": "GitHubSmokePayload",
+      "metadata": {
+        "provider": "github_models",
+        "model": "openai/gpt-4o-mini",
+        "role": "critic",
+        "prompt_version": "github-models-smoke-v1",
+        "provider_sdk": "openai/2.46.0",
+        "latency_ms": 3853,
+        "usage": {
+          "input_tokens": 179,
+          "output_tokens": 88,
+          "total_tokens": 267,
+          "estimated_cost_usd": null
+        },
+        "request_id": "chatcmpl-E412TvvBhsgl2JpOIRjQnQhJEezxm",
+        "generated_at": "2026-07-21T09:26:43.595296Z"
+      },
+      "sample": {
+        "caption": "🚀 Introducing FocusMate: Your ultimate productivity companion! Stay organized, boost your efficiency, and achieve your goals like never before. Download now and transform your workflow! 💪✨",
+        "hashtags": [
+          "#Productivity",
+          "#FocusMate",
+          "#GetThingsDone",
+          "#WorkSmart",
+          "#AppLaunch"
+        ],
+        "cta": "Download FocusMate today and start your journey to better productivity!"
+      }
+    }
+  ]
+}
