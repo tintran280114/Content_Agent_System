@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import Field
 
@@ -10,7 +10,7 @@ from .ai.models import DraftPost, StrictModel
 from .policy import AccountPolicy
 
 
-class ViolationCode(str, Enum):
+class ViolationCode(StrEnum):
     EMPTY_CONTENT = "EMPTY_CONTENT"
     MAX_LENGTH = "MAX_LENGTH"
     BANNED_TERM = "BANNED_TERM"

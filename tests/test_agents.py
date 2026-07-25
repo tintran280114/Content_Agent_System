@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import json
 import unittest
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.agents import CopywriterAgent, ResearchAgent, run_research_copywriter
 from content_agent.ai.base import ChatMessage, ProviderResponse, SchemaT, StructuredProvider
 from content_agent.ai.models import (
-    DraftPayload,
+    ContentRequest,
     GenerationMetadata,
     PolicyContext,
-    ResearchPayload,
     TokenUsage,
 )
 
@@ -94,6 +92,37 @@ class AgentTests(unittest.TestCase):
         self.assertIn("Keep the post under 900 characters", copy_prompt)
         self.assertIn("#ResponsibleAI", copy_prompt)
         self.assertIn("revolutionary", copy_prompt)
+
+    def test_source_content_and_operator_instructions_reach_both_agents(self) -> None:
+        request = ContentRequest.from_inputs(
+            topic="Product launch",
+            instructions="Turn this into a concise launch post with one practical CTA.",
+            source_content="Release notes: offline mode is available on Monday.",
+            source_name="release-notes.md",
+            task="repurpose",
+        )
+        research_provider = FakeProvider("gemini", "gemini-test", self.research_payload)
+        copy_provider = FakeProvider("groq", "groq-test", self.draft_payload)
+
+        research = ResearchAgent(research_provider).run(
+            request=request,
+            policy=self.policy,
+        )
+        draft = CopywriterAgent(copy_provider).run(
+            research=research,
+            policy=self.policy,
+            request=request,
+        )
+
+        research_prompt = "\n".join(message.content for message in research_provider.last_messages)
+        copy_prompt = "\n".join(message.content for message in copy_provider.last_messages)
+        for prompt in (research_prompt, copy_prompt):
+            self.assertIn("offline mode is available on Monday", prompt)
+            self.assertIn("concise launch post", prompt)
+            self.assertIn('"task": "repurpose"', prompt)
+        self.assertIn("untrusted", research_prompt)
+        self.assertEqual(research.request_id, request.request_id)
+        self.assertEqual(draft.request_id, request.request_id)
 
     def test_copywriter_rejects_policy_account_mismatch(self) -> None:
         research_provider = FakeProvider("gemini", "gemini-test", self.research_payload)

@@ -1,32 +1,41 @@
-"""Wednesday-MVP hybrid Critic, rewrite, review, and mock-publish pipeline."""
+"""Hybrid Critic, rewrite, review, and guarded policy-publish pipeline."""
 
 from __future__ import annotations
 
 import time
-from enum import Enum
+from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import TypeVar
 from uuid import UUID, uuid4
 
 from .ai.agents import CopywriterAgent, CriticAgent, ResearchAgent, RewriteAgent
 from .ai.base import StructuredProvider
 from .ai.config import Role
 from .ai.errors import ProviderError
-from .ai.models import CriticResult, Decision, DraftPost, GenerationMetadata, ResearchBrief
+from .ai.models import (
+    ContentRequest,
+    ContentTask,
+    CriticResult,
+    Decision,
+    DraftPost,
+    GenerationMetadata,
+    ResearchBrief,
+)
 from .ai.registry import create_role_provider
 from .critics import RuleCritic
 from .platform import EventState, RunStep, SQLiteRunStore
 from .policy import AccountPolicy, load_policy
-from .publisher import MockPublisher, Publisher
+from .publisher import PolicyPublisherRouter, Publisher, PublishError
 from .quota import QuotaManager
 from .workflow import DraftOrigin, PipelineResult, WorkflowState
 
-ProviderFactory = Callable[[Role], StructuredProvider]
+ProviderFactory = Callable[..., StructuredProvider]
 SleepFunction = Callable[[float], None]
 ResultT = TypeVar("ResultT", ResearchBrief, DraftPost, CriticResult)
 
 
-class PipelineMode(str, Enum):
+class PipelineMode(StrEnum):
     DRAFT = "draft"
     FULL = "full"
 
@@ -63,15 +72,19 @@ class PipelineOrchestrator:
         self.store = store
         self.provider_factory = provider_factory
         self.rule_critic = rule_critic or RuleCritic()
-        self.publisher = publisher or MockPublisher(store)
+        self.publisher = publisher or PolicyPublisherRouter(store)
         self.quota_manager = quota_manager or QuotaManager(store)
         self.max_provider_attempts = max_provider_attempts
         self.base_backoff_seconds = max(0.0, base_backoff_seconds)
         self.sleeper = sleeper
 
     def _provider_for(self, role: Role, policy: AccountPolicy) -> StructuredProvider:
-        provider = self.provider_factory(role)
         expected = policy.model_route[role.value]
+        provider = self.provider_factory(
+            role,
+            provider=expected,
+            model=policy.model_overrides.get(role.value),
+        )
         if provider.provider_name != expected:
             raise PipelineContractError(
                 f"Policy routes {role.value} to '{expected}', "
@@ -140,18 +153,30 @@ class PipelineOrchestrator:
             return exc.code.value, str(exc), exc.retryable
         if isinstance(exc, PipelineContractError):
             return "contract_mismatch", str(exc), False
+        if isinstance(exc, PublishError):
+            return exc.code, str(exc), exc.retryable
         return "pipeline_error", "Pipeline step failed; inspect stored events and retry.", False
 
     def run(
         self,
         *,
-        topic: str,
+        topic: str | None = None,
         policy_path: str | Path,
         mode: PipelineMode | str = PipelineMode.FULL,
+        instructions: str = "",
+        source_content: str = "",
+        source_name: str | None = None,
+        task: ContentTask | str = ContentTask.CREATE,
+        request: ContentRequest | None = None,
     ) -> PipelineResult:
-        normalized_topic = topic.strip()
-        if not normalized_topic:
-            raise ValueError("topic must not be empty")
+        content_request = request or ContentRequest.from_inputs(
+            topic=topic or "",
+            instructions=instructions,
+            source_content=source_content,
+            source_name=source_name,
+            task=task,
+        )
+        normalized_topic = content_request.topic
         normalized_mode = mode if isinstance(mode, PipelineMode) else PipelineMode(mode)
         source_path = Path(policy_path)
         policy = load_policy(source_path)
@@ -167,6 +192,7 @@ class PipelineOrchestrator:
             topic=normalized_topic,
             policy=policy,
             source_path=source_path,
+            request=content_request,
         )
         self.store.record_event(run_id=run_id, step=RunStep.RUN, state=EventState.STARTED)
         self.store.record_event(run_id=run_id, step=RunStep.POLICY, state=EventState.COMPLETED)
@@ -179,7 +205,7 @@ class PipelineOrchestrator:
                 step=current_step,
                 provider=research_provider,
                 operation=lambda: ResearchAgent(research_provider).run(
-                    topic=normalized_topic,
+                    request=content_request,
                     policy=policy,
                 ),
             )
@@ -199,6 +225,7 @@ class PipelineOrchestrator:
                 operation=lambda: CopywriterAgent(copywriter_provider).run(
                     research=research,
                     policy=policy,
+                    request=content_request,
                 ),
             )
             self.store.save_artifact(
@@ -228,6 +255,7 @@ class PipelineOrchestrator:
                 return PipelineResult(
                     run_id=run_id,
                     mode=normalized_mode.value,
+                    request=content_request,
                     policy=policy,
                     research=research,
                     draft=current_draft,
@@ -265,12 +293,12 @@ class PipelineOrchestrator:
                         draft=current_draft,
                         policy=policy,
                         rule_result=rule_result,
+                        request=content_request,
+                        research=research,
                     ),
                 )
                 if latest_critic.decision != Decision.PASS and rewrite_count >= self.MAX_REWRITES:
-                    latest_critic = latest_critic.model_copy(
-                        update={"decision": Decision.HUMAN_REVIEW}
-                    )
+                    latest_critic = latest_critic.model_copy(update={"decision": Decision.HUMAN_REVIEW})
                 self.store.save_critic_result(
                     run_id=run_id,
                     revision=rewrite_count,
@@ -280,6 +308,36 @@ class PipelineOrchestrator:
 
                 if latest_critic.decision == Decision.PASS:
                     workflow = self.store.get_workflow(run_id)
+                    if policy.publishing.approval_required:
+                        self.store.update_workflow(
+                            run_id,
+                            state=WorkflowState.HUMAN_REVIEW.value,
+                            current_draft_id=current_draft.draft_id,
+                            rewrite_count=rewrite_count,
+                            expected_version=int(workflow["version"]),
+                        )
+                        self.store.record_event(
+                            run_id=run_id,
+                            step=RunStep.HUMAN_REVIEW,
+                            state=EventState.COMPLETED,
+                        )
+                        self.store.complete_run(run_id)
+                        self.store.record_event(
+                            run_id=run_id,
+                            step=RunStep.RUN,
+                            state=EventState.COMPLETED,
+                        )
+                        return PipelineResult(
+                            run_id=run_id,
+                            mode=normalized_mode.value,
+                            request=content_request,
+                            policy=policy,
+                            research=research,
+                            draft=current_draft,
+                            critic=latest_critic,
+                            workflow_state=WorkflowState.HUMAN_REVIEW,
+                            rewrite_count=rewrite_count,
+                        )
                     self.store.update_workflow(
                         run_id,
                         state=WorkflowState.PASSED.value,
@@ -294,6 +352,7 @@ class PipelineOrchestrator:
                         state=EventState.STARTED,
                     )
                     receipt = self.publisher.publish(run_id)
+                    published_workflow = WorkflowState(str(self.store.get_workflow(run_id)["state"]))
                     self.store.record_event(
                         run_id=run_id,
                         step=current_step,
@@ -308,11 +367,12 @@ class PipelineOrchestrator:
                     return PipelineResult(
                         run_id=run_id,
                         mode=normalized_mode.value,
+                        request=content_request,
                         policy=policy,
                         research=research,
                         draft=current_draft,
                         critic=latest_critic,
-                        workflow_state=WorkflowState.PUBLISHED,
+                        workflow_state=published_workflow,
                         rewrite_count=rewrite_count,
                         publish_receipt=receipt,
                     )
@@ -340,6 +400,7 @@ class PipelineOrchestrator:
                     return PipelineResult(
                         run_id=run_id,
                         mode=normalized_mode.value,
+                        request=content_request,
                         policy=policy,
                         research=research,
                         draft=current_draft,
@@ -369,6 +430,7 @@ class PipelineOrchestrator:
                         critic=latest_critic,
                         policy=policy,
                         rewrite_number=rewrite_count,
+                        request=content_request,
                     ),
                 )
                 self.store.save_draft_revision(
@@ -440,6 +502,7 @@ class PipelineOrchestrator:
                 return PipelineResult(
                     run_id=run_id,
                     mode=normalized_mode.value,
+                    request=content_request,
                     policy=policy,
                     research=research,
                     draft=current_draft,

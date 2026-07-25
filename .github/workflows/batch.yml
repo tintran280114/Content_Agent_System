@@ -30,6 +30,11 @@ jobs:
       GROQ_MODEL: openai/gpt-oss-120b
       GITHUB_MODELS_TOKEN: ${{ secrets.GITHUB_MODELS_TOKEN }}
       GITHUB_MODELS_MODEL: openai/gpt-4o-mini
+      META_GRAPH_API_VERSION: v25.0
+      THREADS_GRAPH_API_VERSION: v1.0
+      FACEBOOK_COMMUNITY_PAGE_TOKEN: ${{ secrets.FACEBOOK_COMMUNITY_PAGE_TOKEN }}
+      THREADS_RESPONSIBLE_AI_TOKEN: ${{ secrets.THREADS_RESPONSIBLE_AI_TOKEN }}
+      CONTENT_AGENT_PUBLISH_MODE: ${{ vars.CONTENT_AGENT_PUBLISH_MODE || 'dry-run' }}
       CONTENT_AGENT_GEMINI_MAX_REQUESTS_PER_DAY: 100
       CONTENT_AGENT_GEMINI_MAX_TOKENS_PER_DAY: 100000
       CONTENT_AGENT_GROQ_MAX_REQUESTS_PER_DAY: 300
@@ -64,7 +69,10 @@ jobs:
             fi
           fi
       - name: Run all accounts through the full pipeline
-        run: python run.py --all --pipeline full --topic "$BATCH_TOPIC" --database artifacts/content_agent.sqlite3
+        run: >-
+          python run.py --all --pipeline full --topic "$BATCH_TOPIC"
+          --database artifacts/content_agent.sqlite3
+          --publish-mode "$CONTENT_AGENT_PUBLISH_MODE"
       - name: Upload SQLite and generated evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.errors import ErrorCode, ProviderError
 from content_agent.ai.models import TokenUsage
 from content_agent.platform import EventState, RunStep, SQLiteRunStore
@@ -15,7 +14,7 @@ from content_agent.policy import load_policy
 from content_agent.quota import QuotaBudget, QuotaManager
 
 FIXTURES = Path(__file__).parent / "fixtures"
-NOW = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 22, 12, 0, tzinfo=UTC)
 
 
 class QuotaManagerTests(unittest.TestCase):

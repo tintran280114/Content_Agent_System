@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.models import (
     CriticResult,
     DraftPost,

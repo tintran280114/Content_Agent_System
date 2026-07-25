@@ -2,7 +2,8 @@
 
 ## Account
 - account_id: startup-growth
-- spec_version: 0.1
+- spec_version: 0.2
+- active: true
 
 ## Goal
 Give early-stage founders concise experiments they can apply to sustainable growth.
@@ -50,6 +51,10 @@ English
 280
 
 ## Model Route
-- research: gemini
-- copywriter: groq
-- critic: github_models
+- research: gemini@gemini-3.1-flash-lite
+- copywriter: groq@openai/gpt-oss-120b
+- critic: github_models@openai/gpt-4o-mini
+
+## Publishing
+- adapter: mock
+- approval_required: false

@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import Field
 
-from .ai.models import CriticResult, DraftPost, ResearchBrief, StrictModel
+from .ai.models import ContentRequest, CriticResult, DraftPost, ResearchBrief, StrictModel
 from .policy import AccountPolicy
 
 
-class WorkflowState(str, Enum):
+class WorkflowState(StrEnum):
     DRAFTED = "drafted"
     DRAFTING = "drafting"
     CRITIQUING = "critiquing"
@@ -21,24 +21,28 @@ class WorkflowState(str, Enum):
     HUMAN_REVIEW = "human_review"
     APPROVED = "approved"
     REJECTED = "rejected"
+    DRY_RUN = "dry_run"
     PUBLISHED = "published"
 
 
-class DraftOrigin(str, Enum):
+class DraftOrigin(StrEnum):
     INITIAL_AI = "initial_ai"
     AI_REWRITE = "ai_rewrite"
     HUMAN_EDIT = "human_edit"
 
 
-class ReviewActionType(str, Enum):
+class ReviewActionType(StrEnum):
     APPROVE = "approve"
     REJECT = "reject"
     EDIT = "edit"
 
 
-class PublishStatus(str, Enum):
+class PublishStatus(StrEnum):
+    PENDING = "pending"
     PUBLISHED = "published"
     BLOCKED = "blocked"
+    DRY_RUN = "dry_run"
+    FAILED = "failed"
 
 
 class PublishReceipt(StrictModel):
@@ -47,12 +51,18 @@ class PublishReceipt(StrictModel):
     draft_id: UUID
     status: PublishStatus
     destination: str = "mock"
+    idempotency_key: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
+    remote_post_id: str | None = None
+    topic_tag: str | None = None
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    attempt_count: int = Field(default=1, ge=0)
     reason: str = Field(min_length=1)
 
 
 class PipelineResult(StrictModel):
     run_id: UUID
     mode: Literal["draft", "full"]
+    request: ContentRequest | None = None
     policy: AccountPolicy
     research: ResearchBrief
     draft: DraftPost

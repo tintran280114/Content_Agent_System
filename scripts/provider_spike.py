@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -218,7 +218,7 @@ def live_rows(roles: list[Role], include_fallbacks: bool) -> list[dict[str, Any]
 def write_artifact(path: Path, *, mode: str, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "mode": mode,
         "free_tier_expected": True,
         "results": rows,
@@ -230,8 +230,7 @@ def print_rows(rows: list[dict[str, Any]]) -> None:
     print(f"{'ROLE':<12} {'PROVIDER':<16} {'ROUTE':<12} {'STATUS':<12} MODEL")
     for row in rows:
         print(
-            f"{row['role']:<12} {row['provider']:<16} {row['route']:<12} "
-            f"{row['status']:<12} {row['model']}"
+            f"{row['role']:<12} {row['provider']:<16} {row['route']:<12} {row['status']:<12} {row['model']}"
         )
         if "error" in row:
             print(f"  error={row['error']['code']}: {row['error']['message']}")

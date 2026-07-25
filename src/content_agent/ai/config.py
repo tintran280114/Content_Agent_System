@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-from enum import Enum
-from typing import Mapping
+from collections.abc import Mapping
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class Role(str, Enum):
+class Role(StrEnum):
     RESEARCH = "research"
     COPYWRITER = "copywriter"
     CRITIC = "critic"
@@ -51,8 +51,7 @@ DEFAULT_ROUTES: dict[Role, ModelRoute] = {
         fallback_models=("qwen/qwen3.6-27b",),
         free_tier_note="Groq Free Plan, subject to the organization Limits page.",
         lifecycle_note=(
-            "Migrated from llama-3.3-70b-versatile before its free/developer "
-            "shutdown on 2026-08-16."
+            "Migrated from llama-3.3-70b-versatile before its free/developer shutdown on 2026-08-16."
         ),
     ),
     Role.CRITIC: ModelRoute(

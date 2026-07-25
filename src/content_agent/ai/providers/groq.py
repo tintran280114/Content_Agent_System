@@ -4,13 +4,37 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from typing import Any, Literal
 
 from groq import Groq
 
 from ..base import ChatMessage, ProviderResponse, SchemaT, StructuredProvider, parse_structured_text
 from ..errors import ProviderError, missing_credential, normalize_provider_exception
 from ._utils import metadata, sdk_version
+
+STRICT_SCHEMA_MODELS = {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}
+
+
+def _strict_schema(response_model: type[SchemaT]) -> dict[str, Any]:
+    """Adapt Pydantic JSON Schema to Groq strict-mode object requirements."""
+
+    schema = response_model.model_json_schema()
+
+    def close_objects(node: Any) -> None:
+        if isinstance(node, dict):
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                node["required"] = list(properties)
+                node["additionalProperties"] = False
+            for value in node.values():
+                close_objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                close_objects(value)
+
+    close_objects(schema)
+    return schema
 
 
 class GroqProvider(StructuredProvider):
@@ -37,22 +61,36 @@ class GroqProvider(StructuredProvider):
         role: Literal["research", "copywriter", "critic"],
         prompt_version: str,
     ) -> ProviderResponse[SchemaT]:
-        request_messages = [
-            {"role": message.role, "content": message.content}
-            for message in messages
-        ]
-        request_messages[-1]["content"] += (
-            "\n\nThe JSON object must validate against this schema:\n"
-            + json.dumps(response_model.model_json_schema(), ensure_ascii=False)
-        )
+        request_messages = [{"role": message.role, "content": message.content} for message in messages]
+        strict_mode = self.model in STRICT_SCHEMA_MODELS
+        if strict_mode:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_model.__name__,
+                    "strict": True,
+                    "schema": _strict_schema(response_model),
+                },
+            }
+        else:
+            response_format = {"type": "json_object"}
+            request_messages[-1]["content"] += (
+                "\n\nThe JSON object must validate against this schema:\n"
+                + json.dumps(response_model.model_json_schema(), ensure_ascii=False)
+            )
         started = time.perf_counter()
         try:
+            request: dict[str, Any] = {
+                "model": self.model,
+                "messages": request_messages,
+                "response_format": response_format,
+                "temperature": 0.2,
+                "max_completion_tokens": 1400,
+            }
+            if strict_mode:
+                request["reasoning_effort"] = "low"
             response = self.client.chat.completions.create(
-                model=self.model,
-                messages=request_messages,
-                response_format={"type": "json_object"},
-                temperature=0.2,
-                max_completion_tokens=1400,
+                **request,
             )
             text = response.choices[0].message.content
             parsed = parse_structured_text(

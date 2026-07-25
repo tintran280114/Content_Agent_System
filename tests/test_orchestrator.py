@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.base import ChatMessage, ProviderResponse, SchemaT, StructuredProvider
 from content_agent.ai.config import Role
 from content_agent.ai.errors import ErrorCode, ProviderError
@@ -86,9 +86,13 @@ class OrchestratorTests(unittest.TestCase):
         }
         result = PipelineOrchestrator(
             self.store,
-            provider_factory=lambda role: providers[role],
+            provider_factory=lambda role, **_: providers[role],
         ).run(
             topic="Responsible AI",
+            instructions="Use the supplied launch note as the factual anchor.",
+            source_content="Launch note: the review checklist has exactly three steps.",
+            source_name="launch-note.md",
+            task="repurpose",
             policy_path=FIXTURES / "policy_valid.md",
             mode=PipelineMode.DRAFT,
         )
@@ -100,11 +104,21 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(result.mode, "draft")
         self.assertEqual(result.workflow_state.value, "drafted")
         self.assertEqual(result.draft.brief_id, result.research.brief_id)
+        self.assertEqual(result.research.request_id, result.request.request_id)
+        self.assertEqual(result.draft.request_id, result.request.request_id)
 
         artifacts = self.store.get_artifacts(result.run_id)
         self.assertEqual(
             set(artifacts),
-            {"account_policy", "research_brief", "draft_post"},
+            {"account_policy", "content_request", "research_brief", "draft_post"},
+        )
+        self.assertEqual(
+            artifacts["content_request"]["payload"]["source_content"],
+            "Launch note: the review checklist has exactly three steps.",
+        )
+        self.assertEqual(
+            self.store.get_content_request(result.run_id).request_id,
+            result.request.request_id,
         )
         self.assertEqual(
             artifacts["draft_post"]["payload"]["brief_id"],
@@ -124,7 +138,7 @@ class OrchestratorTests(unittest.TestCase):
         with self.assertRaises(PipelineRunError) as caught:
             PipelineOrchestrator(
                 self.store,
-                provider_factory=lambda role: FailingProvider(),
+                provider_factory=lambda role, **_: FailingProvider(),
                 max_provider_attempts=1,
             ).run(
                 topic="Responsible AI",
@@ -156,7 +170,7 @@ class OrchestratorTests(unittest.TestCase):
         with self.assertRaises(PipelineRunError) as caught:
             PipelineOrchestrator(
                 self.store,
-                provider_factory=lambda role: providers[role],
+                provider_factory=lambda role, **_: providers[role],
             ).run(
                 topic="Responsible AI",
                 policy_path=policy_path,

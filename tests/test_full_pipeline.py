@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 from uuid import uuid4
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.base import ChatMessage, ProviderResponse, SchemaT, StructuredProvider
 from content_agent.ai.config import Role
 from content_agent.ai.errors import ErrorCode, ProviderError
@@ -110,15 +110,13 @@ class FullPipelineTests(unittest.TestCase):
         quota_manager: QuotaManager | None = None,
     ) -> tuple[PipelineOrchestrator, dict[Role, SequenceProvider]]:
         providers = {
-            Role.RESEARCH: SequenceProvider(
-                "gemini", "gemini-test", research_responses or [RESEARCH]
-            ),
+            Role.RESEARCH: SequenceProvider("gemini", "gemini-test", research_responses or [RESEARCH]),
             Role.COPYWRITER: SequenceProvider("groq", "groq-test", drafts),
             Role.CRITIC: SequenceProvider("github_models", "github-test", critics),
         }
         orchestrator = PipelineOrchestrator(
             self.store,
-            provider_factory=lambda role: providers[role],
+            provider_factory=lambda role, **_: providers[role],
             base_backoff_seconds=0.25,
             sleeper=(sleep_calls.append if sleep_calls is not None else lambda _: None),
             quota_manager=quota_manager,
@@ -133,6 +131,23 @@ class FullPipelineTests(unittest.TestCase):
         self.assertEqual(result.publish_receipt.status, PublishStatus.PUBLISHED)
         self.assertEqual(self.store.get_workflow(result.run_id)["state"], "published")
         self.assertEqual(len(self.store.get_publish_attempts(result.run_id)), 1)
+
+    def test_policy_can_require_human_approval_before_any_publish_attempt(self) -> None:
+        text = (FIXTURES / "policy_valid.md").read_text(encoding="utf-8")
+        text += """
+
+## Publishing
+- adapter: mock
+- approval_required: true
+"""
+        policy_path = Path(self.tempdir.name) / "approval-required.md"
+        policy_path.write_text(text, encoding="utf-8")
+        orchestrator, _ = self.orchestrator(drafts=[DRAFT], critics=[PASS])
+
+        result = orchestrator.run(topic="Responsible AI", policy_path=policy_path)
+
+        self.assertEqual(result.workflow_state, WorkflowState.HUMAN_REVIEW)
+        self.assertEqual(self.store.get_publish_attempts(result.run_id), [])
 
     def test_fail_then_rewrite_then_pass(self) -> None:
         orchestrator, providers = self.orchestrator(
@@ -272,7 +287,7 @@ class FullPipelineTests(unittest.TestCase):
             model="gemini-test",
         )
 
-        def factory(role: Role):
+        def factory(role: Role, **_):
             if role == Role.RESEARCH:
                 raise error
             raise AssertionError("No later provider should be created")

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Literal, Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -23,7 +24,7 @@ class TokenUsage(StrictModel):
     estimated_cost_usd: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
-    def total_covers_known_tokens(self) -> "TokenUsage":
+    def total_covers_known_tokens(self) -> TokenUsage:
         known = self.input_tokens + self.output_tokens
         if self.total_tokens < known:
             self.total_tokens = known
@@ -39,7 +40,7 @@ class GenerationMetadata(StrictModel):
     latency_ms: int = Field(ge=0)
     usage: TokenUsage = Field(default_factory=TokenUsage)
     request_id: str | None = None
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class PolicyContext(StrictModel):
@@ -65,7 +66,7 @@ class PolicyContext(StrictModel):
     max_length: int | None = Field(default=None, ge=1)
 
     @classmethod
-    def from_policy(cls, policy: Any) -> "PolicyContext":
+    def from_policy(cls, policy: Any) -> PolicyContext:
         if isinstance(policy, cls):
             return policy
         if isinstance(policy, BaseModel):
@@ -89,6 +90,80 @@ class PolicyContext(StrictModel):
         return cls.model_validate(selected)
 
 
+class ContentTask(StrEnum):
+    """Operator intent for the source material supplied to the pipeline."""
+
+    CREATE = "create"
+    REPURPOSE = "repurpose"
+    REWRITE = "rewrite"
+    SUMMARIZE = "summarize"
+
+
+class ContentSource(StrEnum):
+    """How source content entered the system."""
+
+    NONE = "none"
+    PASTED = "pasted"
+    FILE = "file"
+
+
+class ContentRequest(StrictModel):
+    """Frozen operator input kept separate from AI-generated content."""
+
+    request_id: UUID = Field(default_factory=uuid4)
+    topic: str = Field(min_length=1, max_length=500)
+    instructions: str = Field(default="", max_length=5_000)
+    source_content: str = Field(default="", max_length=30_000)
+    source_name: str | None = Field(default=None, max_length=255)
+    source_type: ContentSource = ContentSource.NONE
+    task: ContentTask = ContentTask.CREATE
+
+    @model_validator(mode="after")
+    def validate_source_and_task(self) -> ContentRequest:
+        has_source = bool(self.source_content)
+        if self.source_type == ContentSource.NONE and has_source:
+            raise ValueError("source_type must describe supplied source_content")
+        if self.source_type != ContentSource.NONE and not has_source:
+            raise ValueError("source_content is required for pasted or file input")
+        if self.source_type == ContentSource.FILE and not self.source_name:
+            raise ValueError("source_name is required for file input")
+        if self.source_type != ContentSource.FILE and self.source_name:
+            raise ValueError("source_name is available only for file input")
+        if self.task != ContentTask.CREATE and not has_source:
+            raise ValueError(f"task '{self.task.value}' requires source content")
+        return self
+
+    @classmethod
+    def from_inputs(
+        cls,
+        *,
+        topic: str,
+        instructions: str = "",
+        source_content: str = "",
+        source_name: str | None = None,
+        task: ContentTask | str = ContentTask.CREATE,
+    ) -> ContentRequest:
+        normalized_source = source_content.strip()
+        normalized_name = source_name.strip() if source_name else None
+        if normalized_source:
+            source_type = ContentSource.FILE if normalized_name else ContentSource.PASTED
+        else:
+            source_type = ContentSource.NONE
+            normalized_name = None
+        return cls(
+            topic=topic,
+            instructions=instructions,
+            source_content=normalized_source,
+            source_name=normalized_name,
+            source_type=source_type,
+            task=task,
+        )
+
+    @property
+    def has_source_content(self) -> bool:
+        return bool(self.source_content)
+
+
 class ResearchPayload(StrictModel):
     """Provider-generated portion of a ResearchBrief."""
 
@@ -102,6 +177,7 @@ class ResearchPayload(StrictModel):
 
 class ResearchBrief(ResearchPayload):
     brief_id: UUID = Field(default_factory=uuid4)
+    request_id: UUID | None = None
     topic: str = Field(min_length=1)
     account_id: str = Field(min_length=1)
     metadata: GenerationMetadata
@@ -119,13 +195,14 @@ class DraftPayload(StrictModel):
 class DraftPost(DraftPayload):
     draft_id: UUID = Field(default_factory=uuid4)
     brief_id: UUID
+    request_id: UUID | None = None
     topic: str = Field(min_length=1)
     account_id: str = Field(min_length=1)
     platform: str = Field(min_length=1)
     metadata: GenerationMetadata
 
 
-class Decision(str, Enum):
+class Decision(StrEnum):
     PASS = "pass"
     REWRITE = "rewrite"
     HUMAN_REVIEW = "human_review"

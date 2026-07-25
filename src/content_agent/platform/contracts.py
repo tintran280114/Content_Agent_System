@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import Field
@@ -11,13 +11,13 @@ from pydantic import Field
 from ..ai.models import StrictModel, TokenUsage
 
 
-class RunState(str, Enum):
+class RunState(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
 
 
-class RunStep(str, Enum):
+class RunStep(StrEnum):
     RUN = "run"
     POLICY = "policy"
     RESEARCH = "research"
@@ -29,7 +29,7 @@ class RunStep(str, Enum):
     PUBLISHER = "publisher"
 
 
-class EventState(str, Enum):
+class EventState(StrEnum):
     STARTED = "started"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -48,4 +48,4 @@ class RunEvent(StrictModel):
     error_message: str | None = None
     retryable: bool = False
     status_code: int | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

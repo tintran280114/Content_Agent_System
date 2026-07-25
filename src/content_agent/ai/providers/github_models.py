@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from typing import Literal
 
 from openai import OpenAI
 
@@ -46,10 +47,7 @@ class GitHubModelsProvider(StructuredProvider):
         role: Literal["research", "copywriter", "critic"],
         prompt_version: str,
     ) -> ProviderResponse[SchemaT]:
-        request_messages = [
-            {"role": message.role, "content": message.content}
-            for message in messages
-        ]
+        request_messages = [{"role": message.role, "content": message.content} for message in messages]
         request_messages[-1]["content"] += (
             "\n\nThe JSON object must validate against this schema:\n"
             + json.dumps(response_model.model_json_schema(), ensure_ascii=False)

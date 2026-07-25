@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.models import DraftPost
 from content_agent.critics import RuleCritic, ViolationCode, render_post
 from content_agent.policy import load_policy

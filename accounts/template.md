@@ -2,7 +2,8 @@
 
 ## Account
 - account_id: replace-with-slug
-- spec_version: 0.1
+- spec_version: 0.2
+- active: true
 
 ## Goal
 Describe the measurable communication goal for this account.
@@ -45,6 +46,12 @@ English
 900
 
 ## Model Route
-- research: gemini
-- copywriter: groq
-- critic: github_models
+- research: gemini@gemini-3.1-flash-lite
+- copywriter: groq@openai/gpt-oss-120b
+- critic: github_models@openai/gpt-4o-mini
+
+## Publishing
+- adapter: mock
+- approval_required: true
+
+<!-- Threads may also set topic_tag, pipe-separated topic_tag_candidates, and trend_search. -->

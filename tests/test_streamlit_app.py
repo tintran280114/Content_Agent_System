@@ -9,7 +9,6 @@ from uuid import uuid4
 from streamlit.testing.v1 import AppTest
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.models import CriticResult, Decision, DraftPost, ResearchBrief
 from content_agent.critics import RuleCritic
 from content_agent.platform import SQLiteRunStore
@@ -31,18 +30,71 @@ class StreamlitAppTests(unittest.TestCase):
                     default_timeout=15,
                 ).run()
                 self.assertEqual(list(app.exception), [])
-                self.assertEqual(app.title[0].value, "Social Content Operations")
-                self.assertTrue(any("No run data yet" in info.value for info in app.info))
+                self.assertEqual(app.title[0].value, "✨ Content Studio")
+                self.assertTrue(any("No runs yet" in info.value for info in app.info))
                 self.assertFalse(any(field.label == "SQLite path" for field in app.text_input))
-                self.assertEqual(len(app.file_uploader), 1)
+                upload_labels = {uploader.label for uploader in app.file_uploader}
+                self.assertIn("Upload a non-empty SQLite snapshot", upload_labels)
+                self.assertIn("Upload account policy Markdown", upload_labels)
+                self.assertNotIn("Hoặc upload nội dung gốc (.md/.txt)", upload_labels)
                 labels = [tab.label for tab in app.tabs]
-                self.assertIn("Human review", labels)
-                self.assertIn("Scores & usage", labels)
-                self.assertNotIn("Run batch", labels)
-                self.assertNotIn("Evidence", labels)
+                self.assertIn("1 · Create content", labels)
+                self.assertIn("2 · Review & approve", labels)
+                self.assertIn("3 · Publish", labels)
+                self.assertIn("4 · Accounts & policies", labels)
+                self.assertIn("5 · Analytics", labels)
+                self.assertIn("6 · Help & testing", labels)
+                self.assertTrue(any(button.label == "Kiểm tra 3 kết nối" for button in app.button))
+                self.assertTrue(any(button.label == "Xóa key nhập tay" for button in app.button))
+                self.assertTrue(
+                    any(control.label == "Bạn muốn bắt đầu từ đâu?" for control in app.segmented_control)
+                )
+                gemini_key = next(field for field in app.text_input if field.label == "Gemini · Research")
+                gemini_key.set_value("manual-session-test")
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("Đang dùng key nhập tay" in markdown.value for markdown in app.markdown))
+                next(button for button in app.button if button.label == "Xóa key nhập tay").click()
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("key mặc định của hệ thống" in info.value for info in app.info))
+                self.assertTrue(any(field.label == "Chủ đề / Topic *" for field in app.text_input))
+                self.assertTrue(
+                    any(area.label == "Bạn muốn AI viết bài như thế nào? *" for area in app.text_area)
+                )
+                self.assertTrue(any(button.label == "✨ Tạo bài bằng AI" for button in app.button))
+                generate_button = next(
+                    button for button in app.button if button.label == "✨ Tạo bài bằng AI"
+                )
+                generate_button.click()
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("Hãy nhập chủ đề" in error.value for error in app.error))
+
+                next(field for field in app.text_input if field.label == "Chủ đề / Topic *").set_value(
+                    "Product launch"
+                )
+                next(button for button in app.button if button.label == "✨ Tạo bài bằng AI").click()
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("Hãy mô tả bài viết" in error.value for error in app.error))
+
+                next(
+                    control
+                    for control in app.segmented_control
+                    if control.label == "Bạn muốn bắt đầu từ đâu?"
+                ).set_value("source")
+                app.run()
+                upload_labels = {uploader.label for uploader in app.file_uploader}
+                self.assertIn("Hoặc upload nội dung gốc (.md/.txt)", upload_labels)
+                next(button for button in app.button if button.label == "✨ Tạo bài bằng AI").click()
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("requires source content" in error.value for error in app.error))
+
                 source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
-                self.assertNotIn("PipelineOrchestrator", source)
-                self.assertNotIn("BatchService", source)
+                self.assertIn("PipelineOrchestrator", source)
+                self.assertIn("PolicyBuilderInput", source)
         finally:
             if previous is None:
                 os.environ.pop("CONTENT_AGENT_DB", None)
@@ -61,9 +113,7 @@ class StreamlitAppTests(unittest.TestCase):
                 ).model_copy(update={"account_id": policy.account_id})
                 draft = DraftPost.model_validate_json(
                     (FIXTURES / "draft_post_valid.json").read_text(encoding="utf-8")
-                ).model_copy(
-                    update={"account_id": policy.account_id, "brief_id": research.brief_id}
-                )
+                ).model_copy(update={"account_id": policy.account_id, "brief_id": research.brief_id})
                 critic = CriticResult.model_validate_json(
                     (FIXTURES / "critic_result_valid.json").read_text(encoding="utf-8")
                 ).model_copy(
@@ -122,6 +172,36 @@ class StreamlitAppTests(unittest.TestCase):
                 review_select = next(box for box in app.selectbox if box.label == "Review item")
                 self.assertEqual(review_select.value, str(run_id))
                 self.assertTrue(any(draft.content in area.value for area in app.text_area))
+
+                approve_actor = next(field for field in app.text_input if field.label == "Operator")
+                approve_actor.set_value("boss@example.com")
+                approve_button = next(
+                    button for button in app.button if button.label == "Approve and move to Publish"
+                )
+                approve_button.click()
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("Approval failed" in error.value for error in app.error))
+                self.assertEqual(store.get_workflow(run_id)["state"], "human_review")
+
+                approval_note = next(
+                    area for area in app.text_area if area.label == "Approval note (required)"
+                )
+                approval_note.set_value("Reviewed and approved for guarded publishing.")
+                approve_button = next(
+                    button for button in app.button if button.label == "Approve and move to Publish"
+                )
+                approve_button.click()
+                app.run()
+
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("Approved successfully" in success.value for success in app.success))
+                self.assertTrue(any(f"--publish-approved {run_id}" in block.value for block in app.code))
+                self.assertEqual(store.get_workflow(run_id)["state"], "approved")
+                self.assertEqual(
+                    [action["action"] for action in store.get_review_actions(run_id)],
+                    ["approve"],
+                )
         finally:
             if previous is None:
                 os.environ.pop("CONTENT_AGENT_DB", None)

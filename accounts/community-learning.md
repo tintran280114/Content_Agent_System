@@ -2,7 +2,8 @@
 
 ## Account
 - account_id: community-learning
-- spec_version: 0.1
+- spec_version: 0.2
+- active: true
 
 ## Goal
 Make trustworthy AI concepts accessible to community educators and adult learners.
@@ -49,6 +50,12 @@ English
 1200
 
 ## Model Route
-- research: gemini
-- copywriter: groq
-- critic: github_models
+- research: gemini@gemini-3.1-flash-lite
+- copywriter: groq@openai/gpt-oss-120b
+- critic: github_models@openai/gpt-4o-mini
+
+## Publishing
+- adapter: facebook_page
+- target_id: 000000000000001
+- credential_ref: FACEBOOK_COMMUNITY_PAGE_TOKEN
+- approval_required: true

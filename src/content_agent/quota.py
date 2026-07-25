@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Callable, Mapping
+from datetime import UTC, datetime
 
 from .ai.errors import ErrorCode, ProviderError
 from .platform import SQLiteRunStore
@@ -40,7 +40,7 @@ class QuotaManager:
     ) -> None:
         self.store = store
         self.budgets = dict(budgets or self.from_environment())
-        self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.clock = clock or (lambda: datetime.now(UTC))
 
     @staticmethod
     def from_environment() -> dict[str, QuotaBudget]:
@@ -75,7 +75,7 @@ class QuotaManager:
                 model=model,
             )
         now = self.clock()
-        start_of_day = now.astimezone(timezone.utc).replace(
+        start_of_day = now.astimezone(UTC).replace(
             hour=0,
             minute=0,
             second=0,

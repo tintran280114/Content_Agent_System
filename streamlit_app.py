@@ -1,4 +1,4 @@
-"""Review-only operations dashboard for the CLI-first content pipeline."""
+"""Guided end-to-end social content studio and operations dashboard."""
 
 from __future__ import annotations
 
@@ -16,22 +16,212 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+from content_agent.ai.config import DEFAULT_ROUTES, Role
+from content_agent.ai.connectivity import probe_all_connections
+from content_agent.ai.models import ContentRequest, ContentTask
+from content_agent.ai.registry import create_role_provider
+from content_agent.critics import render_post
+from content_agent.orchestrator import PipelineMode, PipelineOrchestrator, PipelineRunError
 from content_agent.platform import SQLiteRunStore
+from content_agent.policy import PolicyParseError, load_policy, parse_policy_text
+from content_agent.policy_builder import (
+    PolicyBuilderInput,
+    render_policy_markdown,
+    save_policy_markdown,
+    split_lines,
+)
+from content_agent.publisher import PolicyPublisherRouter, PublishError
 from content_agent.review import ReviewService
-from content_agent.snapshot import install_sqlite_snapshot
+from content_agent.snapshot import install_sqlite_snapshot, save_rotating_snapshot
 
 st.set_page_config(
-    page_title="Social Content Ops",
-    page_icon="🛡️",
+    page_title="Social Content Studio",
+    page_icon="✨",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
+
+PROVIDER_CREDENTIALS = {
+    "GEMINI_API_KEY": "Gemini · Research",
+    "GROQ_API_KEY": "Groq · Copywriter",
+    "GITHUB_MODELS_TOKEN": "GitHub Models · Critic",
+}
+
+
+def _inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+          --ink: #111827;
+          --muted: #64748b;
+          --brand: #6d5dfc;
+          --brand-2: #14b8a6;
+          --panel: rgba(255,255,255,.88);
+        }
+        .stApp {
+          background:
+            radial-gradient(circle at 88% 2%, rgba(109,93,252,.12), transparent 25rem),
+            radial-gradient(circle at 12% 22%, rgba(20,184,166,.08), transparent 22rem),
+            #f7f8fc;
+        }
+        [data-testid="stSidebar"] {
+          background:
+            radial-gradient(circle at 0% 0%, rgba(124,58,237,.22), transparent 18rem),
+            linear-gradient(180deg, #0b1220 0%, #111c36 100%);
+          border-right: 1px solid rgba(148,163,184,.18);
+        }
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] p {
+          color: #eef2ff;
+        }
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+          color: #b8c3d9;
+        }
+        [data-testid="stSidebar"] input {
+          color: #111827 !important;
+          background: #ffffff !important;
+          border-radius: 12px;
+        }
+        [data-testid="stSidebar"] button {
+          color: #172033 !important;
+          background: #f8fafc;
+          border: 1px solid rgba(148,163,184,.42);
+          border-radius: 12px;
+          font-weight: 700;
+        }
+        [data-testid="stSidebar"] button p {
+          color: inherit !important;
+        }
+        [data-testid="stSidebar"] button[kind="primary"] {
+          color: #ffffff !important;
+          background: linear-gradient(110deg, #6d5dfc, #4f46e5);
+          border: 0;
+        }
+        [data-testid="stSidebar"] details {
+          background: rgba(255,255,255,.055);
+          border: 1px solid rgba(148,163,184,.16);
+          border-radius: 16px;
+          padding: .15rem .35rem;
+        }
+        [data-testid="stSidebar"] code {
+          color: #dbeafe;
+          background: rgba(99,102,241,.24);
+          border-radius: 6px;
+          padding: .1rem .35rem;
+        }
+        [data-testid="stSidebar"] [data-testid="stAlert"] * { color: inherit; }
+        .hero {
+          border-radius: 24px;
+          padding: 2rem 2.2rem;
+          color: white;
+          background: linear-gradient(120deg, #4f46e5 0%, #7c3aed 52%, #0f766e 100%);
+          box-shadow: 0 18px 48px rgba(79,70,229,.22);
+          margin-bottom: 1rem;
+        }
+        .hero h1 { margin: 0 0 .45rem; font-size: 2.35rem; letter-spacing: -.04em; }
+        .hero p { margin: 0; opacity: .9; font-size: 1.04rem; }
+        .flow {
+          display: grid;
+          grid-template-columns: repeat(6, minmax(105px, 1fr));
+          gap: .55rem;
+          margin: .8rem 0 1.3rem;
+        }
+        .flow-step {
+          background: var(--panel);
+          border: 1px solid rgba(148,163,184,.25);
+          border-radius: 14px;
+          padding: .72rem .8rem;
+          box-shadow: 0 5px 18px rgba(15,23,42,.05);
+          font-size: .82rem;
+          color: var(--ink);
+        }
+        .flow-step b {
+          display: block;
+          color: var(--brand);
+          font-size: .72rem;
+          text-transform: uppercase;
+          letter-spacing: .06em;
+          margin-bottom: .18rem;
+        }
+        [data-testid="stMetric"] {
+          background: var(--panel);
+          border: 1px solid rgba(148,163,184,.22);
+          border-radius: 16px;
+          padding: .8rem 1rem;
+          box-shadow: 0 5px 20px rgba(15,23,42,.05);
+        }
+        [data-testid="stTabs"] button { font-weight: 700; }
+        div[data-testid="stForm"] {
+          background: rgba(255,255,255,.72);
+          border: 1px solid rgba(148,163,184,.25);
+          border-radius: 22px;
+          padding: 1.15rem;
+          box-shadow: 0 12px 34px rgba(15,23,42,.06);
+        }
+        .hint-card {
+          border-left: 4px solid var(--brand);
+          background: rgba(255,255,255,.82);
+          border-radius: 12px;
+          padding: .9rem 1rem;
+          margin: .5rem 0;
+        }
+        .composer-intro {
+          border: 1px solid rgba(109,93,252,.2);
+          background: linear-gradient(120deg, rgba(109,93,252,.1), rgba(20,184,166,.08));
+          border-radius: 18px;
+          padding: 1rem 1.15rem;
+          margin: .4rem 0 1rem;
+        }
+        .composer-intro strong {
+          display: block;
+          color: #4338ca;
+          font-size: 1.03rem;
+          margin-bottom: .25rem;
+        }
+        .status-chip {
+          display: inline-block;
+          border-radius: 999px;
+          padding: .2rem .55rem;
+          margin: .08rem 0 .45rem;
+          color: #d1fae5;
+          background: rgba(16,185,129,.16);
+          border: 1px solid rgba(52,211,153,.28);
+          font-size: .78rem;
+          font-weight: 700;
+        }
+        @media (max-width: 900px) {
+          .flow { grid-template-columns: repeat(2, 1fr); }
+          .hero h1 { font-size: 1.8rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _database_path() -> Path:
-    configured = Path(
-        os.environ.get("CONTENT_AGENT_DB", ROOT / "artifacts" / "content_agent.sqlite3")
-    )
+    configured = Path(os.environ.get("CONTENT_AGENT_DB", ROOT / "artifacts" / "content_agent.sqlite3"))
     return configured if configured.is_absolute() else ROOT / configured
+
+
+def _policy_paths() -> list[Path]:
+    return sorted(path for path in (ROOT / "accounts").glob("*.md") if path.name != "template.md")
+
+
+def _policy_catalog() -> tuple[dict[str, tuple[Path, object]], list[str]]:
+    catalog: dict[str, tuple[Path, object]] = {}
+    errors: list[str] = []
+    for path in _policy_paths():
+        try:
+            policy = load_policy(path)
+            catalog[policy.account_id] = (path, policy)
+        except (PolicyParseError, ValueError) as exc:
+            errors.append(str(exc))
+    return catalog, errors
 
 
 def _set_notice(level: str, message: str) -> None:
@@ -51,34 +241,318 @@ def _show_notice() -> None:
     renderer(notice["message"])
 
 
+def _configured_secret(key: str) -> str:
+    environment_value = os.environ.get(key, "").strip()
+    if environment_value:
+        return environment_value
+    try:
+        deployed_value = str(st.secrets.get(key, "")).strip()
+    except Exception:
+        deployed_value = ""
+    return deployed_value
+
+
+def _credential_source(key: str) -> str:
+    manual = str(st.session_state.get(f"runtime_secret_{key}", "") or "").strip()
+    if manual:
+        return "manual"
+    if _configured_secret(key):
+        return "system"
+    return "missing"
+
+
+def _runtime_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    runtime = dict(os.environ)
+    for credential in PROVIDER_CREDENTIALS:
+        override = st.session_state.get(f"runtime_secret_{credential}", "").strip()
+        value = override or _configured_secret(credential)
+        if value:
+            runtime[credential] = value
+    if extra:
+        runtime.update({key: value for key, value in extra.items() if value.strip()})
+    return runtime
+
+
+def _missing_provider_credentials() -> list[str]:
+    runtime = _runtime_env()
+    return [key for key in PROVIDER_CREDENTIALS if not runtime.get(key, "").strip()]
+
+
+def _clear_manual_credentials() -> None:
+    for credential in PROVIDER_CREDENTIALS:
+        st.session_state.pop(f"runtime_secret_{credential}", None)
+    st.session_state.pop("connection_probe_results", None)
+    st.session_state["notice"] = {
+        "level": "info",
+        "message": "Đã xóa key nhập tay; app đang dùng key mặc định của hệ thống.",
+    }
+
+
+def _invalidate_snapshot_download() -> None:
+    st.session_state.pop("snapshot_download_bundle", None)
+
+
+def _snapshot_signature(database: Path, runs: list[dict[str, object]]) -> str:
+    run_state = "|".join(
+        f"{run.get('run_id')}:{run.get('state')}:{run.get('workflow_state')}:{run.get('updated_at')}"
+        for run in runs
+    )
+    return f"{database.resolve()}::{run_state}"
+
+
+def _snapshot_download_bundle(
+    store: SQLiteRunStore,
+    database: Path,
+    runs: list[dict[str, object]],
+) -> dict[str, object]:
+    signature = _snapshot_signature(database, runs)
+    current = st.session_state.get("snapshot_download_bundle")
+    if current and current.get("signature") == signature:
+        return current
+    data = store.backup_bytes()
+    saved = save_rotating_snapshot(
+        data,
+        database.parent / "snapshots",
+        limit=20,
+    )
+    bundle = {
+        "signature": signature,
+        "name": saved.name,
+        "data": data,
+    }
+    st.session_state["snapshot_download_bundle"] = bundle
+    return bundle
+
+
+def _render_connection_results() -> None:
+    results = st.session_state.get("connection_probe_results", [])
+    if not results:
+        return
+    for result in results:
+        status = str(result["status"])
+        icon = "✅" if status == "ready" else "⚠️" if status in {"rate_limited"} else "❌"
+        st.caption(
+            f"{icon} **{str(result['role']).title()}** · `{result['provider']}` · "
+            f"`{result['model']}` · {result['message']} ({result['latency_ms']} ms)"
+        )
+
+
+def _render_snapshot_import(database: Path) -> None:
+    st.info(
+        "Advanced handoff only: import runs created by CLI or GitHub Actions. This does not generate content."
+    )
+    uploaded_snapshot = st.file_uploader(
+        "Upload a non-empty SQLite snapshot",
+        type=("sqlite3", "sqlite", "db"),
+        key="snapshot_upload",
+        help="Do not upload Markdown, Word files, API keys, or an empty database.",
+    )
+    if st.button(
+        "Load SQLite snapshot",
+        disabled=uploaded_snapshot is None,
+        width="stretch",
+    ):
+        try:
+            summary = install_sqlite_snapshot(
+                uploaded_snapshot.getvalue(),
+                database,
+                require_runs=True,
+            )
+            _invalidate_snapshot_download()
+            level = "success" if summary["human_review"] else "warning"
+            _set_notice(
+                level,
+                f"Snapshot loaded: {summary['runs']} run(s), {summary['human_review']} waiting for approval.",
+            )
+            st.rerun()
+        except (ValueError, OSError, sqlite3.DatabaseError) as exc:
+            st.error(str(exc))
+
+
+def _set_review_result(
+    *,
+    action: str,
+    level: str,
+    title: str,
+    message: str,
+    run_id: str,
+    draft_id: str,
+    state: str,
+    actor: str,
+) -> None:
+    st.session_state["review_action_result"] = {
+        "action": action,
+        "level": level,
+        "title": title,
+        "message": message,
+        "run_id": run_id,
+        "draft_id": draft_id,
+        "state": state,
+        "actor": actor,
+    }
+
+
+def _show_review_result(database: Path) -> None:
+    result = st.session_state.get("review_action_result")
+    if not result:
+        return
+    with st.container(border=True):
+        renderer = {
+            "success": st.success,
+            "warning": st.warning,
+            "error": st.error,
+            "info": st.info,
+        }.get(result["level"], st.info)
+        renderer(f"{result['title']}: {result['message']}")
+        columns = st.columns(4)
+        columns[0].metric("Action", result["action"])
+        columns[1].metric("New state", result["state"])
+        columns[2].metric("Run", result["run_id"][:8])
+        columns[3].metric("Operator", result["actor"] or "Unknown")
+        st.caption(f"Run ID: `{result['run_id']}` · Draft ID: `{result['draft_id']}`")
+        if result["action"] == "approve" and result["level"] == "success":
+            st.markdown("**Next step:** open **3 · Publish** and run a dry-run first.")
+            st.code(
+                f"python run.py --publish-approved {result['run_id']} "
+                f'--database "{database}" --publish-mode dry-run',
+                language="powershell",
+            )
+        if st.button("Dismiss latest result", key="dismiss_review_result"):
+            st.session_state.pop("review_action_result", None)
+            st.rerun()
+
+
+def _show_generation_result(store: SQLiteRunStore) -> None:
+    result = st.session_state.get("generation_result")
+    if not result:
+        return
+    run_id = result["run_id"]
+    try:
+        draft = store.get_current_draft(run_id)
+        request = store.get_content_request(run_id)
+        workflow = store.get_workflow(run_id)
+        critic = store.get_latest_critic(run_id)
+    except (KeyError, ValueError):
+        st.session_state.pop("generation_result", None)
+        return
+    st.success(
+        f"AI generation completed · state `{workflow['state']}` · "
+        f"score `{critic.score if critic else 'not scored'}`"
+    )
+    st.text_area(
+        "Generated post",
+        value=render_post(draft),
+        height=210,
+        disabled=True,
+        key=f"generated_post_{run_id}",
+    )
+    st.caption(
+        f"Topic: **{request.topic}** · Task: `{request.task.value}` · Source: `{request.source_type.value}`"
+    )
+    with st.expander("View the exact input used for this post"):
+        st.write(f"**Operator instructions:** {request.instructions or 'None'}")
+        if request.source_content:
+            st.text_area(
+                "Source content",
+                value=request.source_content,
+                height=180,
+                disabled=True,
+                key=f"generated_source_{run_id}",
+            )
+        else:
+            st.write("No source content; the post was created from the topic and policy.")
+    st.caption(f"Run ID: `{run_id}` · Request ID: `{request.request_id}` · Draft ID: `{draft.draft_id}`")
+    if workflow["state"] == "human_review":
+        st.info("The post is waiting in **2 · Review & approve**.")
+    elif workflow["state"] in {"approved", "dry_run"}:
+        st.info("The post is ready in **3 · Publish**.")
+
+
+def _publish_result_panel() -> None:
+    result = st.session_state.get("publish_result")
+    if not result:
+        return
+    renderer = st.success if result["status"] in {"published", "dry_run"} else st.warning
+    renderer(
+        f"Publish result: `{result['status']}` · destination `{result['destination']}` · {result['reason']}"
+    )
+    st.caption(
+        f"Publish ID: `{result['publish_id']}` · Remote post: `{result.get('remote_post_id') or 'none'}`"
+    )
+
+
 load_dotenv(ROOT / ".env", override=False)
+_inject_styles()
 database_path = _database_path()
 
 with st.sidebar:
-    st.header("Content Agent Ops")
-    st.caption("The CLI and scheduled workflow own content generation.")
+    st.title("✨ Content Studio")
+    st.caption("Nhập ý tưởng, để AI viết và kiểm tra bài, sau đó duyệt trước khi đăng.")
     operator_identity = st.text_input(
-        "Operator name or email",
+        "Tên hoặc email người vận hành",
         value=st.session_state.get("operator_identity", ""),
         key="operator_identity",
-        help="Stored in approve, reject, and edit audit events.",
+        placeholder="Ví dụ: FanTek hoặc boss@company.com",
+        help="Được lưu trong lịch sử khi approve, reject hoặc edit.",
     )
-    with st.expander("Cloud snapshot handoff"):
+
+    with st.expander(
+        "🔑 Kết nối AI",
+        expanded=bool(_missing_provider_credentials()),
+    ):
         st.caption(
-            "For Streamlit Cloud only: load the SQLite artifact produced by the CLI or Actions."
+            "Có thể để trống để dùng key mặc định của hệ thống. Key nhập tay chỉ "
+            "ghi đè trong phiên này và không lưu vào Markdown hoặc SQLite."
         )
-        uploaded = st.file_uploader(
-            "SQLite snapshot",
-            type=("sqlite3", "sqlite", "db"),
-            label_visibility="collapsed",
+        for credential, label in PROVIDER_CREDENTIALS.items():
+            manual_value = st.text_input(
+                label,
+                type="password",
+                key=f"runtime_secret_{credential}",
+                placeholder=(
+                    "Không bắt buộc · đang dùng key hệ thống"
+                    if _configured_secret(credential)
+                    else "Dán API key tạm thời"
+                ),
+                help=f"Để trống để dùng system setting `{credential}`.",
+            )
+            if manual_value.strip():
+                status_text = "✅ Đang dùng key nhập tay"
+            elif _configured_secret(credential):
+                status_text = "✅ Key mặc định hệ thống đang hoạt động"
+            else:
+                status_text = "⚠️ Chưa có key"
+            st.markdown(
+                f'<span class="status-chip">{status_text}</span>',
+                unsafe_allow_html=True,
+            )
+
+        if st.button(
+            "Kiểm tra 3 kết nối",
+            type="primary",
+            width="stretch",
+            help="Kiểm tra key, endpoint và model mà không tạo content.",
+        ):
+            with st.spinner("Checking provider endpoints…"):
+                results = probe_all_connections(env=_runtime_env())
+            st.session_state["connection_probe_results"] = [
+                result.model_dump(mode="json") for result in results
+            ]
+            if all(result.ready for result in results):
+                _set_notice("success", "Cả ba kết nối AI đều sẵn sàng.")
+            else:
+                _set_notice(
+                    "error",
+                    "Có ít nhất một kết nối chưa sẵn sàng. Mở Kết nối AI để xem chi tiết.",
+                )
+            st.rerun()
+        st.button(
+            "Xóa key nhập tay",
+            width="stretch",
+            help="Quay lại dùng key mặc định của hệ thống.",
+            on_click=_clear_manual_credentials,
         )
-        if st.button("Load snapshot", disabled=uploaded is None, width="stretch"):
-            try:
-                install_sqlite_snapshot(uploaded.getvalue(), database_path)
-                _set_notice("success", "SQLite snapshot loaded. Dashboard state is refreshed.")
-                st.rerun()
-            except (ValueError, OSError, sqlite3.DatabaseError) as exc:
-                st.error(str(exc))
+        _render_connection_results()
 
 try:
     store = SQLiteRunStore(database_path)
@@ -86,70 +560,361 @@ except Exception as exc:
     st.error(f"The SQLite operations store could not start ({type(exc).__name__}).")
     st.stop()
 
-review_service = ReviewService(store)
+review_service = ReviewService(store, publish_on_approve=False)
+catalog, policy_errors = _policy_catalog()
 runs = store.list_runs()
 queue = store.list_review_queue()
 usage = store.usage_summary()
+snapshot_bundle = _snapshot_download_bundle(store, database_path, runs)
 
 with st.sidebar:
-    st.success("SQLite operations store ready")
+    st.divider()
+    st.caption(f"Database · `{database_path.name}`")
+    st.success(f"{len(runs)} runs · {len(queue)} waiting for review")
     st.download_button(
-        "Download SQLite evidence",
-        data=store.backup_bytes(),
-        file_name="content_agent.sqlite3",
+        "Download unique SQLite snapshot",
+        data=snapshot_bundle["data"],
+        file_name=str(snapshot_bundle["name"]),
         mime="application/vnd.sqlite3",
         width="stretch",
+        on_click=_invalidate_snapshot_download,
+        key="sidebar_snapshot_download",
     )
-    st.caption("Mock Publisher · no external database · no generation in this UI")
+    st.caption("Random collision-safe name · newest 20 snapshots retained locally.")
+    st.caption("Need help or import? Open **5 · Analytics → Data transfer**.")
 
-st.title("Social Content Operations")
-st.caption("Queue · Human review · Score history · Token and cost audit")
+st.markdown(
+    """
+    <section class="hero">
+      <h1>Social Content Agent Studio</h1>
+      <p>Chọn kênh, nhập chủ đề và mô tả bài bạn muốn. AI tự research, viết,
+      kiểm tra và đưa bài vào hàng duyệt — người tạo content không cần biết Markdown.</p>
+    </section>
+    <div class="flow">
+      <div class="flow-step"><b>Bước 1</b>Kết nối AI</div>
+      <div class="flow-step"><b>Bước 2</b>Chọn kênh</div>
+      <div class="flow-step"><b>Bước 3</b>Nhập topic + mong muốn</div>
+      <div class="flow-step"><b>Bước 4</b>AI viết & tự chấm</div>
+      <div class="flow-step"><b>Bước 5</b>Người thật duyệt</div>
+      <div class="flow-step"><b>Bước 6</b>Dry-run rồi mới đăng</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 _show_notice()
+_show_review_result(database_path)
 
 metric_columns = st.columns(4)
-metric_columns[0].metric("Runs", len(runs))
-metric_columns[1].metric("Human queue", len(queue))
+metric_columns[0].metric("All runs", len(runs))
+metric_columns[1].metric("Waiting for review", len(queue))
 metric_columns[2].metric(
+    "Ready to publish",
+    sum(1 for run in runs if run.get("workflow_state") in {"approved", "dry_run"}),
+)
+metric_columns[3].metric(
     "Published",
     sum(1 for run in runs if run.get("workflow_state") == "published"),
 )
-metric_columns[3].metric("Total tokens", f"{usage['total']['total_tokens']:,}")
 
-overview_tab, review_tab, history_tab, usage_tab = st.tabs(
-    ["Overview", "Human review", "Run history", "Scores & usage"]
+create_tab, review_tab, publish_tab, accounts_tab, analytics_tab, help_tab = st.tabs(
+    [
+        "1 · Create content",
+        "2 · Review & approve",
+        "3 · Publish",
+        "4 · Accounts & policies",
+        "5 · Analytics",
+        "6 · Help & testing",
+    ]
 )
 
-with overview_tab:
-    st.subheader("Latest scheduled batch state")
-    if not runs:
-        st.info(
-            "No run data yet. Run `python run.py --account <slug>` or `python run.py --all`, "
-            "then refresh this dashboard."
-        )
-    else:
-        overview_fields = [
-            "run_id",
-            "account_id",
-            "topic",
-            "state",
-            "workflow_state",
-            "rewrite_count",
-            "score",
-            "created_at",
-        ]
-        st.dataframe(
-            [{field: row.get(field) for field in overview_fields} for row in runs],
-            width="stretch",
-            hide_index=True,
-        )
+with create_tab:
+    st.header("AI Content Composer")
+    st.markdown(
+        """
+        <div class="composer-intro">
+          <strong>Không cần biết Markdown.</strong>
+          Chỉ cần chọn kênh, nhập chủ đề và mô tả bài viết bạn muốn.
+          AI sẽ research, viết, tự kiểm tra và đưa bài vào hàng chờ duyệt.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    composer_mode = st.segmented_control(
+        "Bạn muốn bắt đầu từ đâu?",
+        options=("prompt", "source"),
+        default="prompt",
+        format_func=lambda value: {
+            "prompt": "✨ Tạo mới từ prompt",
+            "source": "📄 Biến nội dung có sẵn thành bài đăng",
+        }[value],
+        key="composer_mode",
+        width="stretch",
+    )
+    left, right = st.columns([1.7, 1], gap="large")
+    with left:
+        if not catalog:
+            st.error(
+                "Chưa có kênh/phong cách hợp lệ. Hãy tạo bằng form tại "
+                "**4 · Accounts & policies**; không cần tự viết Markdown."
+            )
+        else:
+            with st.form("generation_form"):
+                selected_account = st.selectbox(
+                    "Kênh & phong cách",
+                    options=list(catalog),
+                    format_func=lambda account_id: (
+                        f"{catalog[account_id][1].platform} · {account_id} · {catalog[account_id][1].tone}"
+                    ),
+                    help=(
+                        "Chọn preset có sẵn. Audience, giọng văn, quy tắc và model "
+                        "đã được hệ thống cấu hình phía sau."
+                    ),
+                )
+                topic = st.text_input(
+                    "Chủ đề / Topic *",
+                    placeholder="Ví dụ: Ba cách học Python hiệu quả cho người mới",
+                    help="Một câu ngắn mô tả chủ đề chính của bài.",
+                )
+
+                source_content = ""
+                source_upload = None
+                if composer_mode == "prompt":
+                    objective = st.selectbox(
+                        "Mục tiêu bài viết",
+                        options=("educate", "engage", "announce", "promote", "story"),
+                        format_func=lambda value: {
+                            "educate": "Chia sẻ kiến thức / hướng dẫn",
+                            "engage": "Tăng tương tác / mở thảo luận",
+                            "announce": "Thông báo / cập nhật",
+                            "promote": "Giới thiệu sản phẩm hoặc dịch vụ",
+                            "story": "Kể chuyện / case study",
+                        }[value],
+                    )
+                    desired_content = st.text_area(
+                        "Bạn muốn AI viết bài như thế nào? *",
+                        placeholder=(
+                            "Ví dụ: Viết thành checklist 3 bước, dễ hiểu cho người mới, "
+                            "có ví dụ thực tế và kết thúc bằng một câu hỏi."
+                        ),
+                        height=120,
+                        help=(
+                            "Mô tả góc tiếp cận, ý chính, độ dài, CTA hoặc kết quả "
+                            "bạn mong muốn bằng ngôn ngữ tự nhiên."
+                        ),
+                    )
+                    must_include = st.text_area(
+                        "Thông tin bắt buộc phải có (không bắt buộc)",
+                        placeholder=(
+                            "Tên sản phẩm, lợi ích, số liệu đã kiểm chứng, link hoặc CTA cần nhắc đến."
+                        ),
+                        height=75,
+                    )
+                    objective_text = {
+                        "educate": "Goal: educate with useful, practical guidance.",
+                        "engage": "Goal: encourage a relevant, thoughtful discussion.",
+                        "announce": "Goal: communicate an announcement clearly.",
+                        "promote": "Goal: introduce an offer without hype or unsupported claims.",
+                        "story": "Goal: tell a concise story with a clear takeaway.",
+                    }[objective]
+                    instructions = "\n".join(
+                        part
+                        for part in (
+                            objective_text,
+                            desired_content.strip(),
+                            f"Must include: {must_include.strip()}" if must_include.strip() else "",
+                        )
+                        if part
+                    )
+                    content_task = ContentTask.CREATE.value
+                else:
+                    content_task = st.selectbox(
+                        "Bạn muốn xử lý nội dung gốc thế nào?",
+                        options=("repurpose", "rewrite", "summarize"),
+                        format_func=lambda value: {
+                            "repurpose": "Chuyển thể cho đúng kênh và audience",
+                            "rewrite": "Viết lại hay hơn nhưng giữ nguyên ý",
+                            "summarize": "Tóm tắt thành bài social ngắn gọn",
+                        }[value],
+                    )
+                    instructions = st.text_area(
+                        "Bạn muốn AI biến đổi nội dung như thế nào?",
+                        placeholder=(
+                            "Ví dụ: Chuyển thành checklist 3 bước, giữ nguyên các dữ kiện "
+                            "và kết thúc bằng một câu hỏi cho team lead."
+                        ),
+                        height=95,
+                    )
+                    source_content = st.text_area(
+                        "Dán nội dung gốc",
+                        placeholder=(
+                            "Dán bài viết, ghi chú chiến dịch, thông báo sản phẩm, "
+                            "transcript hoặc post cũ cần chuyển thể."
+                        ),
+                        height=160,
+                        max_chars=30_000,
+                        help=(
+                            "Nội dung được lưu cùng run để đối chiếu. Có thể dùng ô này "
+                            "hoặc upload một file UTF-8 bên dưới, không dùng đồng thời cả hai."
+                        ),
+                    )
+                    source_upload = st.file_uploader(
+                        "Hoặc upload nội dung gốc (.md/.txt)",
+                        type=("md", "txt"),
+                        accept_multiple_files=False,
+                        help="Tối đa 30.000 ký tự. Người dùng không cần tự tạo account Markdown.",
+                    )
+
+                with st.expander("⚙️ Tùy chọn nâng cao", expanded=False):
+                    generation_mode = st.selectbox(
+                        "Pipeline",
+                        options=("full", "draft"),
+                        format_func=lambda value: (
+                            "Full · research + write + critic + rewrite/review"
+                            if value == "full"
+                            else "Draft only · research + write"
+                        ),
+                        help="Khuyên dùng Full để có chấm điểm, rewrite và human review.",
+                    )
+                    selected_policy = catalog[selected_account][1]
+                    st.caption(
+                        f"Platform: {selected_policy.platform} · "
+                        f"Ngôn ngữ: {selected_policy.language} · "
+                        f"Ngưỡng duyệt: {selected_policy.threshold}"
+                    )
+                generate = st.form_submit_button(
+                    "✨ Tạo bài bằng AI",
+                    type="primary",
+                    width="stretch",
+                )
+                if generate:
+                    try:
+                        if not topic.strip():
+                            raise ValueError("Hãy nhập chủ đề trước khi tạo bài.")
+                        if composer_mode == "prompt" and not desired_content.strip():
+                            raise ValueError("Hãy mô tả bài viết bạn muốn AI tạo.")
+                        uploaded_text = ""
+                        uploaded_name = None
+                        if source_upload is not None:
+                            if source_content.strip():
+                                raise ValueError("Chỉ dùng một nguồn: xóa phần đã dán hoặc gỡ file upload.")
+                            try:
+                                uploaded_text = source_upload.getvalue().decode("utf-8-sig")
+                            except UnicodeDecodeError as exc:
+                                raise ValueError("File nội dung phải là Markdown/text mã hóa UTF-8.") from exc
+                            uploaded_name = source_upload.name
+                        request = ContentRequest.from_inputs(
+                            topic=topic,
+                            instructions=instructions,
+                            source_content=uploaded_text or source_content,
+                            source_name=uploaded_name,
+                            task=content_task,
+                        )
+                        missing = _missing_provider_credentials()
+                        if missing:
+                            raise ValueError(
+                                "Missing AI credentials: "
+                                + ", ".join(missing)
+                                + ". Dán key tạm trong Kết nối AI hoặc cấu hình key hệ thống."
+                            )
+                        policy_path = catalog[selected_account][0]
+                        runtime = _runtime_env()
+
+                        def provider_factory(role, **kwargs):
+                            return create_role_provider(role, env=runtime, **kwargs)
+
+                        publisher = PolicyPublisherRouter(store, mode="dry-run", env=runtime)
+                        with st.spinner("Researching, writing, checking policy, and scoring the post…"):
+                            result = PipelineOrchestrator(
+                                store,
+                                provider_factory=provider_factory,
+                                publisher=publisher,
+                            ).run(
+                                request=request,
+                                policy_path=policy_path,
+                                mode=PipelineMode(generation_mode),
+                            )
+                        st.session_state["generation_result"] = {"run_id": str(result.run_id)}
+                        _set_notice(
+                            "success",
+                            f"Đã tạo content cho {result.policy.account_id}; "
+                            f"trạng thái là {result.workflow_state.value}.",
+                        )
+                        st.rerun()
+                    except PipelineRunError as exc:
+                        if exc.code == "network":
+                            st.error(
+                                f"Research could not reach the AI provider after three retries. "
+                                f"Run `{exc.run_id}` was saved. Open **Kết nối AI → "
+                                f"Kiểm tra 3 kết nối**. If every provider reports `network`, "
+                                f"restart the app with outbound internet access or check the proxy/firewall."
+                            )
+                        elif exc.code in {"authentication", "permission_denied"}:
+                            st.error(
+                                f"The provider rejected its credential or permission. Run "
+                                f"`{exc.run_id}` was saved. Paste a manual key in **Kết nối AI** "
+                                f"or fix the system default, then test connections."
+                            )
+                        else:
+                            st.error(
+                                f"Generation failed at `{exc.step.value}` ({exc.code}). "
+                                f"Run `{exc.run_id}` is saved for investigation: {exc}"
+                            )
+                    except (PolicyParseError, ValueError, RuntimeError) as exc:
+                        st.error(str(exc))
+    with right:
+        if composer_mode == "prompt":
+            st.markdown(
+                """
+                <div class="hint-card">
+                  <strong>Bạn chỉ cần nhập 2 thứ</strong><br>
+                  <b>Chủ đề</b> là bài nói về gì. <b>Mô tả bài viết</b> cho AI biết
+                  góc viết, cấu trúc, ý chính và CTA bạn muốn.
+                </div>
+                <div class="hint-card">
+                  <strong>Markdown nằm ở đâu?</strong><br>
+                  Markdown chỉ là cấu hình nâng cao cho admin. Người tạo content
+                  bình thường không cần mở, tạo hay upload file Markdown.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+                <div class="hint-card">
+                  <strong>Dùng nội dung có sẵn</strong><br>
+                  Dán bài cũ, transcript hoặc ghi chú rồi chọn chuyển thể, viết lại
+                  hoặc tóm tắt. AI vẫn giữ source để người duyệt đối chiếu.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.markdown("**AI sẽ tự chạy các bước**")
+        for role in (Role.RESEARCH, Role.COPYWRITER, Role.CRITIC):
+            route = DEFAULT_ROUTES[role]
+            source = _credential_source(route.credential_env)
+            ready = "✅" if source != "missing" else "⚠️"
+            selected_model = route.selected_model(_runtime_env())
+            st.write(
+                f"{ready} **{role.value.title()}** · {route.provider} · `{selected_model}` · key: `{source}`"
+            )
+        st.caption("Hãy dùng **Kết nối AI → Kiểm tra 3 kết nối** trước lần generate đầu tiên.")
+    _show_generation_result(store)
 
 with review_tab:
-    st.subheader("Human review queue")
+    st.header("Human review queue")
+    st.caption("Approve, reject, or edit the current revision. Every action is auditable.")
     if not queue:
-        st.success("Queue is empty.")
+        st.info(
+            "No posts are waiting. Generate one in **1 · Create content** using a policy with "
+            "`approval_required: true`."
+        )
     else:
         labels = {
-            row["run_id"]: f"{row['account_id']} · score {row.get('score', 'n/a')} · {row['run_id'][:8]}"
+            row["run_id"]: (
+                f"{row['account_id']} · score {row.get('score', 'n/a')} · "
+                f"{row['topic'][:55]} · {row['run_id'][:8]}"
+            )
             for row in queue
         }
         selected_run = st.selectbox(
@@ -160,161 +925,791 @@ with review_tab:
         )
         item = next(row for row in queue if row["run_id"] == selected_run)
         draft = store.get_current_draft(selected_run)
+        content_request = store.get_content_request(selected_run)
         policy = store.get_policy(selected_run)
         critic = store.get_latest_critic(selected_run)
 
-        left, right = st.columns([2, 1])
+        left, right = st.columns([1.65, 1], gap="large")
         with left:
-            st.markdown(f"**Account:** `{policy.account_id}` · **Platform:** {policy.platform}")
-            st.text_area("Current content", value=draft.content, height=180, disabled=True)
-            st.write("Hashtags:", " ".join(draft.hashtags) or "—")
-            st.write("Call to action:", draft.call_to_action or "—")
+            st.subheader("Post preview")
+            st.caption(
+                f"Account `{policy.account_id}` · {policy.platform} · Publisher `{policy.publishing.adapter}`"
+            )
+            with st.expander("Original content request", expanded=True):
+                st.write(f"**Topic:** {content_request.topic}")
+                st.write(f"**Task:** `{content_request.task.value}`")
+                st.write(f"**Writing brief:** {content_request.instructions or 'No extra instructions'}")
+                if content_request.source_content:
+                    source_label = content_request.source_name or "Pasted content"
+                    st.text_area(
+                        f"Source · {source_label}",
+                        value=content_request.source_content,
+                        height=150,
+                        disabled=True,
+                        key=f"review_source_{selected_run}",
+                    )
+                else:
+                    st.write("**Source content:** None — created from topic and policy.")
+            st.text_area(
+                "Current post",
+                value=render_post(draft),
+                height=240,
+                disabled=True,
+            )
+            st.download_button(
+                "Download post as Markdown",
+                data=render_post(draft),
+                file_name=f"{policy.account_id}-{selected_run[:8]}.md",
+                mime="text/markdown",
+            )
         with right:
             st.metric("Critic score", critic.score if critic else "Unavailable")
+            st.metric("Pass threshold", policy.threshold)
             st.metric("AI rewrites", item["rewrite_count"])
-            st.write("Threshold:", policy.threshold)
+            if critic:
+                st.markdown("**Violations**")
+                st.write(critic.violations or ["None"])
+                st.markdown("**Suggestions**")
+                st.write(critic.suggestions or ["None"])
             if item.get("last_error_code"):
                 st.warning(f"{item['last_error_code']}: {item['last_error_message']}")
 
-        if critic:
-            if str(critic.draft_id) != str(draft.draft_id):
-                st.info(
-                    "The latest AI Critic applies to an earlier revision. This human edit still "
-                    "requires a note and must pass deterministic rules before approval."
-                )
-            st.markdown("**Violations**")
-            st.write(critic.violations or ["None"])
-            st.markdown("**Suggestions**")
-            st.write(critic.suggestions or ["None"])
-
-        action_tabs = st.tabs(["Approve", "Reject", "Edit"])
+        action_tabs = st.tabs(["Approve", "Edit", "Reject", "Audit trail"])
         with action_tabs[0]:
             with st.form("approve_form"):
-                actor = st.text_input("Operator", value=operator_identity, key="approve_actor")
-                note = st.text_area("Approval note (required)", key="approve_note")
-                submitted = st.form_submit_button("Approve and mock-publish")
+                actor = st.text_input(
+                    "Operator",
+                    value=operator_identity,
+                    key="approve_actor",
+                )
+                note = st.text_area(
+                    "Approval note (required)",
+                    placeholder="Example: Checked claims, tone, CTA, and policy constraints.",
+                    key="approve_note",
+                )
+                submitted = st.form_submit_button(
+                    "Approve and move to Publish",
+                    type="primary",
+                    width="stretch",
+                )
                 if submitted:
                     try:
-                        receipt = review_service.approve(
+                        review_service.approve(
                             selected_run,
                             actor=actor,
                             note=note,
                             expected_version=int(item["version"]),
                         )
-                        _set_notice("success", receipt.reason)
+                        updated = store.get_workflow(selected_run)
+                        _set_review_result(
+                            action="approve",
+                            level="success",
+                            title="Approved successfully",
+                            message="The approval is audited and the post is ready for dry-run.",
+                            run_id=str(selected_run),
+                            draft_id=str(draft.draft_id),
+                            state=str(updated["state"]),
+                            actor=actor.strip(),
+                        )
                         st.rerun()
                     except (ValueError, KeyError, RuntimeError) as exc:
-                        st.error(str(exc))
-
+                        st.error(f"Approval failed: {exc}")
         with action_tabs[1]:
-            with st.form("reject_form"):
-                actor = st.text_input("Operator", value=operator_identity, key="reject_actor")
-                note = st.text_area("Rejection note", key="reject_note")
-                submitted = st.form_submit_button("Reject permanently")
-                if submitted:
-                    try:
-                        review_service.reject(
-                            selected_run,
-                            actor=actor,
-                            note=note,
-                            expected_version=int(item["version"]),
-                        )
-                        _set_notice("success", "Draft rejected. Publisher guard remains closed.")
-                        st.rerun()
-                    except (ValueError, KeyError, RuntimeError) as exc:
-                        st.error(str(exc))
-
-        with action_tabs[2]:
             with st.form("edit_form"):
-                actor = st.text_input("Operator", value=operator_identity, key="edit_actor")
-                edited_content = st.text_area("Edited content", value=draft.content, height=180)
-                note = st.text_area("Edit note", key="edit_note")
-                submitted = st.form_submit_button("Save human edit")
+                actor = st.text_input(
+                    "Operator",
+                    value=operator_identity,
+                    key="edit_actor",
+                )
+                edited_content = st.text_area(
+                    "Edited post content",
+                    value=draft.content,
+                    height=200,
+                )
+                note = st.text_area(
+                    "Edit note",
+                    placeholder="Explain what changed and why.",
+                    key="edit_note",
+                )
+                submitted = st.form_submit_button("Save as a new revision", width="stretch")
                 if submitted:
                     try:
-                        review_service.edit(
+                        edited = review_service.edit(
                             selected_run,
                             actor=actor,
                             content=edited_content,
                             note=note,
                             expected_version=int(item["version"]),
                         )
-                        _set_notice(
-                            "success",
-                            "Human edit saved as a new revision; explicit approval is still required.",
+                        updated = store.get_workflow(selected_run)
+                        _set_review_result(
+                            action="edit",
+                            level="success",
+                            title="Edit saved",
+                            message="A new immutable revision was created; approval is still required.",
+                            run_id=str(selected_run),
+                            draft_id=str(edited.draft_id),
+                            state=str(updated["state"]),
+                            actor=actor.strip(),
                         )
                         st.rerun()
                     except (ValueError, KeyError, RuntimeError) as exc:
-                        st.error(str(exc))
-
-        with st.expander("Audit and revision trail"):
-            st.dataframe(store.get_review_actions(selected_run), width="stretch", hide_index=True)
+                        st.error(f"Edit failed: {exc}")
+        with action_tabs[2]:
+            with st.form("reject_form"):
+                actor = st.text_input(
+                    "Operator",
+                    value=operator_identity,
+                    key="reject_actor",
+                )
+                note = st.text_area(
+                    "Rejection reason",
+                    placeholder="Explain why this post must not publish.",
+                    key="reject_note",
+                )
+                submitted = st.form_submit_button("Reject and close publisher guard", width="stretch")
+                if submitted:
+                    try:
+                        updated = review_service.reject(
+                            selected_run,
+                            actor=actor,
+                            note=note,
+                            expected_version=int(item["version"]),
+                        )
+                        _set_review_result(
+                            action="reject",
+                            level="success",
+                            title="Rejected",
+                            message="The publisher guard remains closed.",
+                            run_id=str(selected_run),
+                            draft_id=str(draft.draft_id),
+                            state=str(updated["state"]),
+                            actor=actor.strip(),
+                        )
+                        st.rerun()
+                    except (ValueError, KeyError, RuntimeError) as exc:
+                        st.error(f"Rejection failed: {exc}")
+        with action_tabs[3]:
+            st.dataframe(
+                store.get_review_actions(selected_run),
+                width="stretch",
+                hide_index=True,
+            )
             st.dataframe(store.get_events(selected_run), width="stretch", hide_index=True)
-            st.json(store.get_draft_revisions(selected_run))
-            st.json(store.get_critic_results(selected_run))
 
-with history_tab:
-    st.subheader("Runs, content, and terminal decisions")
-    if not runs:
-        st.info("No run history has been recorded.")
+with publish_tab:
+    st.header("Dry-run and publish")
+    st.caption(
+        "No file upload is needed here. The publisher sends the approved draft already stored "
+        "in SQLite. Always dry-run before live delivery."
+    )
+    _publish_result_panel()
+    eligible = [run for run in runs if run.get("workflow_state") in {"passed", "approved", "dry_run"}]
+    if not eligible:
+        st.info("No approved post is ready. Approve a post in **2 · Review & approve** first.")
     else:
-        st.dataframe(runs, width="stretch", hide_index=True)
-        history_run = st.selectbox(
-            "Inspect run",
-            options=[run["run_id"] for run in runs],
+        publish_run = st.selectbox(
+            "Approved post",
+            options=[run["run_id"] for run in eligible],
             format_func=lambda run_id: next(
-                f"{run['account_id']} · {run_id[:8]} · {run.get('workflow_state') or run['state']}"
-                for run in runs
+                f"{run['account_id']} · {run['topic'][:60]} · {run.get('workflow_state')} · {run_id[:8]}"
+                for run in eligible
                 if run["run_id"] == run_id
             ),
-            key="history_run",
+            key="publish_run",
         )
-        selected = next(run for run in runs if run["run_id"] == history_run)
-        artifacts = store.get_artifacts(history_run)
-        content = artifacts.get("draft_post", {}).get("payload", {})
-        if selected.get("workflow_state"):
-            content = store.get_current_draft(history_run).model_dump(mode="json")
+        publish_policy = store.get_policy(publish_run)
+        publish_request = store.get_content_request(publish_run)
+        publish_draft = store.get_current_draft(publish_run)
+        st.caption(
+            f"Topic: {publish_request.topic} · task `{publish_request.task.value}` · "
+            f"source `{publish_request.source_type.value}`"
+        )
         st.text_area(
-            "Persisted content",
-            value=str(content.get("content", "No draft was produced.")),
-            height=160,
+            "Post to deliver",
+            value=render_post(publish_draft),
+            height=200,
             disabled=True,
+            key="publish_preview",
         )
-        detail_tabs = st.tabs(
-            ["Events", "Revisions", "Critics", "Review actions", "Publish attempts", "Artifacts"]
+        destination = f"{publish_policy.publishing.adapter}:{publish_policy.publishing.target_id or 'mock'}"
+        st.write(
+            f"**Destination:** `{destination}` · "
+            f"**Credential reference:** `{publish_policy.publishing.credential_ref or 'none'}`"
         )
-        detail_tabs[0].dataframe(store.get_events(history_run), width="stretch", hide_index=True)
-        detail_tabs[1].json(store.get_draft_revisions(history_run))
-        detail_tabs[2].json(store.get_critic_results(history_run))
-        detail_tabs[3].dataframe(
-            store.get_review_actions(history_run), width="stretch", hide_index=True
+        dry_column, live_column = st.columns(2, gap="large")
+        with dry_column:
+            st.subheader("1. Validate safely")
+            st.caption("Dry-run does not resolve the Meta token and does not call Meta.")
+            if st.button(
+                "Run publishing dry-run",
+                type="primary",
+                width="stretch",
+                key="publish_dry_run",
+            ):
+                try:
+                    with st.spinner("Validating destination and delivery guard…"):
+                        receipt = PolicyPublisherRouter(
+                            store,
+                            mode="dry-run",
+                            env=_runtime_env(),
+                        ).publish(publish_run)
+                    st.session_state["publish_result"] = receipt.model_dump(mode="json")
+                    st.rerun()
+                except (PublishError, ValueError, KeyError) as exc:
+                    st.error(f"Dry-run failed: {exc}")
+        with live_column:
+            st.subheader("2. Publish live")
+            st.warning("This can create a real external post. Use only after a successful dry-run.")
+            credential_ref = publish_policy.publishing.credential_ref
+            session_token = ""
+            if credential_ref:
+                session_token = st.text_input(
+                    f"{credential_ref} (session only)",
+                    type="password",
+                    key=f"publish_token_{publish_run}",
+                    placeholder=(
+                        "Using secure configuration"
+                        if _configured_secret(credential_ref)
+                        else "Paste current Meta token"
+                    ),
+                )
+            confirm = st.checkbox(
+                "I checked the final content, destination, and dry-run receipt.",
+                key=f"publish_confirm_{publish_run}",
+            )
+            phrase = st.text_input(
+                "Type PUBLISH to unlock live delivery",
+                key=f"publish_phrase_{publish_run}",
+            )
+            placeholder_target = str(publish_policy.publishing.target_id or "").startswith("000")
+            if placeholder_target:
+                st.warning("Live publishing is locked because this policy still has a placeholder target ID.")
+            if st.button(
+                "Publish live now",
+                type="primary",
+                width="stretch",
+                disabled=not confirm or phrase.strip() != "PUBLISH" or placeholder_target,
+                key="publish_live",
+            ):
+                try:
+                    configured_token = (
+                        session_token or _configured_secret(credential_ref) if credential_ref else ""
+                    )
+                    extra = {credential_ref: configured_token} if credential_ref and configured_token else {}
+                    with st.spinner("Sending the approved post through the guarded publisher…"):
+                        receipt = PolicyPublisherRouter(
+                            store,
+                            mode="live",
+                            env=_runtime_env(extra),
+                        ).publish(publish_run)
+                    st.session_state["publish_result"] = receipt.model_dump(mode="json")
+                    st.rerun()
+                except (PublishError, ValueError, KeyError) as exc:
+                    st.error(f"Live publishing failed: {exc}")
+        st.subheader("Delivery receipts")
+        st.dataframe(
+            store.get_publish_attempts(publish_run),
+            width="stretch",
+            hide_index=True,
         )
-        detail_tabs[4].dataframe(
-            store.get_publish_attempts(history_run), width="stretch", hide_index=True
-        )
-        detail_tabs[5].json(artifacts)
 
-with usage_tab:
-    score_rows = store.score_history()
-    st.subheader("Critic score history")
-    if score_rows:
-        score_frame = pd.DataFrame(score_rows)
-        score_frame["created_at"] = pd.to_datetime(score_frame["created_at"])
-        st.line_chart(score_frame, x="created_at", y="score", color="account_id")
-        st.dataframe(score_frame, width="stretch", hide_index=True)
-    else:
-        st.info("No Critic scores have been recorded.")
+with accounts_tab:
+    st.header("Kênh & phong cách content")
+    st.markdown(
+        """
+        <div class="composer-intro">
+          <strong>Người dùng bình thường chỉ cần điền form.</strong>
+          Hệ thống sẽ tự tạo cấu hình account ở phía sau. Markdown chỉ dành cho
+          admin muốn import, review hoặc chỉnh cấu hình nâng cao.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if policy_errors:
+        for error in policy_errors:
+            st.error(error)
+    existing_tab, builder_tab, upload_tab = st.tabs(
+        ["Kênh hiện có", "Tạo kênh bằng form", "Markdown nâng cao"]
+    )
+    with existing_tab:
+        if catalog:
+            st.dataframe(
+                [
+                    {
+                        "account_id": account_id,
+                        "platform": policy.platform,
+                        "tone": policy.tone,
+                        "active": policy.active,
+                        "publisher": policy.publishing.adapter,
+                        "approval_required": policy.publishing.approval_required,
+                        "file": path.name,
+                    }
+                    for account_id, (path, policy) in catalog.items()
+                ],
+                width="stretch",
+                hide_index=True,
+            )
+            inspect_account = st.selectbox(
+                "Chọn kênh để xem",
+                options=list(catalog),
+                key="inspect_policy",
+            )
+            inspect_path, inspect_policy = catalog[inspect_account]
+            st.write(f"**Audience:** {inspect_policy.audience}")
+            st.write(f"**Tone:** {inspect_policy.tone}")
+            st.write(f"**Goal:** {inspect_policy.goal}")
+            with st.expander("Xem file Markdown phía sau (dành cho admin)"):
+                st.code(inspect_path.read_text(encoding="utf-8"), language="markdown")
+                st.download_button(
+                    "Tải cấu hình Markdown",
+                    data=inspect_path.read_bytes(),
+                    file_name=inspect_path.name,
+                    mime="text/markdown",
+                )
+        else:
+            st.info("No valid policies found.")
+    with builder_tab:
+        st.info(
+            "Điền các ô bên dưới rồi bấm tạo. Hệ thống tự sinh và kiểm tra file cấu hình; "
+            "bạn không phải viết Markdown."
+        )
+        with st.form("policy_builder_form"):
+            identity_left, identity_right = st.columns(2)
+            with identity_left:
+                display_name = st.text_input("Display name", value="My Social Account")
+                account_id = st.text_input(
+                    "Account slug",
+                    value="my-social-account",
+                    help="Lowercase letters, numbers, and hyphens only.",
+                )
+                platform = st.selectbox(
+                    "Platform",
+                    options=("Threads", "Facebook", "X", "LinkedIn", "Instagram"),
+                )
+                language = st.text_input("Language", value="Vietnamese")
+            with identity_right:
+                audience = st.text_area(
+                    "Audience",
+                    value="Small business owners and social content teams.",
+                    height=90,
+                )
+                tone = st.text_area(
+                    "Tone of voice",
+                    value="Practical, friendly, trustworthy, and concise.",
+                    height=90,
+                )
+            goal = st.text_area(
+                "Goal & objectives",
+                value="Help the audience apply useful ideas and encourage qualified engagement.",
+                height=90,
+            )
+            constraints_text = st.text_area(
+                "Hard constraints · one per line",
+                value=(
+                    "Do not promise guaranteed results.\n"
+                    "Use concrete and actionable language.\n"
+                    "Keep a human accountable for final publication."
+                ),
+                height=120,
+            )
+            banned_text = st.text_area(
+                "Banned terms · one per line",
+                value="guaranteed\nrevolutionary",
+                height=90,
+            )
+            hashtags_text = st.text_area(
+                "Required hashtags · one per line",
+                value="#ResponsibleAI",
+                height=90,
+            )
+            examples_text = st.text_area(
+                "Voice examples · 2–3 posts, one per line",
+                value=(
+                    "Start with one useful experiment, measure the outcome, and keep a human owner.\n"
+                    "Treat every AI draft as a proposal that still needs evidence and review."
+                ),
+                height=120,
+            )
+            length_col, threshold_col = st.columns(2)
+            with length_col:
+                max_length = st.number_input(
+                    "Maximum post length",
+                    min_value=1,
+                    max_value=10_000,
+                    value=500,
+                )
+            with threshold_col:
+                threshold = st.slider("Critic pass threshold", 0, 100, 80)
+            st.markdown("**Scoring rubric — must total 100**")
+            rubric_columns = st.columns(4)
+            compliance = rubric_columns[0].number_input(
+                "Policy",
+                min_value=0,
+                max_value=100,
+                value=40,
+            )
+            clarity = rubric_columns[1].number_input(
+                "Clarity",
+                min_value=0,
+                max_value=100,
+                value=25,
+            )
+            usefulness = rubric_columns[2].number_input(
+                "Usefulness",
+                min_value=0,
+                max_value=100,
+                value=25,
+            )
+            originality = rubric_columns[3].number_input(
+                "Originality",
+                min_value=0,
+                max_value=100,
+                value=10,
+            )
+            st.markdown("**Publishing configuration**")
+            adapter = st.selectbox(
+                "Publisher adapter",
+                options=("mock", "threads", "facebook_page"),
+                help="Choose mock while learning. Real adapters still require target ID and token.",
+            )
+            approval_required = st.checkbox(
+                "Require human approval before publishing",
+                value=True,
+            )
+            target_id = st.text_input(
+                "Target ID · required for Facebook Page or Threads",
+            )
+            credential_ref = st.text_input(
+                "Token environment variable · uppercase name only",
+                placeholder="THREADS_MY_ACCOUNT_TOKEN",
+            )
+            topic_tag = st.text_input("Threads fallback topic/community tag")
+            topic_candidates_text = st.text_area(
+                "Threads tag candidates · one per line, maximum five",
+                height=90,
+            )
+            trend_search = st.checkbox("Select the most active configured Threads tag")
+            build_policy = st.form_submit_button(
+                "Tạo và kiểm tra cấu hình kênh",
+                type="primary",
+                width="stretch",
+            )
+            if build_policy:
+                try:
+                    values = PolicyBuilderInput(
+                        display_name=display_name,
+                        account_id=account_id,
+                        goal=goal,
+                        audience=audience,
+                        platform=platform,
+                        tone=tone,
+                        language=language,
+                        constraints=split_lines(constraints_text),
+                        banned_terms=split_lines(banned_text),
+                        required_hashtags=split_lines(hashtags_text),
+                        examples=split_lines(examples_text),
+                        threshold=int(threshold),
+                        max_length=int(max_length),
+                        policy_compliance_weight=int(compliance),
+                        clarity_weight=int(clarity),
+                        usefulness_weight=int(usefulness),
+                        originality_weight=int(originality),
+                        adapter=adapter,
+                        target_id=target_id,
+                        credential_ref=credential_ref,
+                        approval_required=approval_required,
+                        topic_tag=topic_tag,
+                        topic_tag_candidates=split_lines(topic_candidates_text),
+                        trend_search=trend_search,
+                    )
+                    st.session_state["policy_editor"] = render_policy_markdown(values)
+                    st.success("Đã tạo và kiểm tra cấu hình. Bấm lưu bên dưới để dùng ngay.")
+                except (PolicyParseError, ValueError) as exc:
+                    st.error(f"Không thể tạo cấu hình: {exc}")
 
-    st.subheader("Token, cost, and retry per post/account")
-    if usage["by_run"]:
-        st.dataframe(usage["by_run"], width="stretch", hide_index=True)
-    else:
-        st.info("No provider usage has been recorded.")
+        if "policy_editor" in st.session_state:
+            st.subheader("Kiểm tra và lưu kênh")
+            st.caption(
+                "Nếu không phải admin, bạn chỉ cần xem phần tóm tắt và bấm lưu. "
+                "Không cần mở hoặc chỉnh Markdown."
+            )
+            with st.expander("Chỉnh Markdown thủ công (admin nâng cao)", expanded=False):
+                policy_editor = st.text_area(
+                    "Policy Markdown",
+                    key="policy_editor",
+                    height=600,
+                    help="Raw contract dành cho admin muốn chỉnh sâu.",
+                )
+            try:
+                preview_policy = parse_policy_text(policy_editor, source="<policy-studio>")
+                st.success(
+                    f"Kênh hợp lệ: `{preview_policy.account_id}` · "
+                    f"{preview_policy.platform} · {preview_policy.publishing.adapter}"
+                )
+                summary_columns = st.columns(3)
+                summary_columns[0].metric("Platform", preview_policy.platform)
+                summary_columns[1].metric("Ngưỡng Critic", preview_policy.threshold)
+                summary_columns[2].metric(
+                    "Cần duyệt",
+                    "Có" if preview_policy.publishing.approval_required else "Không",
+                )
+                overwrite = st.checkbox(
+                    "Ghi đè nếu đã có kênh cùng slug",
+                    key="policy_overwrite",
+                )
+                save_col, download_col = st.columns(2)
+                with save_col:
+                    if st.button(
+                        "Lưu và sử dụng kênh",
+                        type="primary",
+                        width="stretch",
+                    ):
+                        try:
+                            saved_path, saved_policy = save_policy_markdown(
+                                policy_editor,
+                                ROOT / "accounts",
+                                overwrite=overwrite,
+                            )
+                            _set_notice(
+                                "success",
+                                f"Đã lưu {saved_path.name}. Kênh `{saved_policy.account_id}` "
+                                "có thể dùng ngay, không cần sửa code.",
+                            )
+                            st.rerun()
+                        except (OSError, ValueError, FileExistsError) as exc:
+                            st.error(str(exc))
+                with download_col:
+                    st.download_button(
+                        "Tải bản cấu hình cho admin",
+                        data=policy_editor,
+                        file_name=f"{preview_policy.account_id}.md",
+                        mime="text/markdown",
+                        width="stretch",
+                    )
+            except PolicyParseError as exc:
+                st.error(f"Markdown validation failed: {exc}")
+    with upload_tab:
+        st.markdown(
+            "Khu vực admin: upload một **account policy `.md`** đã có. Người dùng "
+            "thông thường nên quay lại tab **Tạo kênh bằng form**."
+        )
+        policy_upload = st.file_uploader(
+            "Upload account policy Markdown",
+            type=("md", "markdown"),
+            key="policy_upload",
+        )
+        if policy_upload is not None:
+            try:
+                uploaded_markdown = policy_upload.getvalue().decode("utf-8")
+                uploaded_policy = parse_policy_text(
+                    uploaded_markdown,
+                    source=policy_upload.name,
+                )
+                st.success(f"Valid policy `{uploaded_policy.account_id}` for {uploaded_policy.platform}.")
+                st.code(uploaded_markdown, language="markdown")
+                overwrite_upload = st.checkbox(
+                    "Replace existing policy with the same slug",
+                    key="upload_policy_overwrite",
+                )
+                if st.button(
+                    "Save uploaded policy",
+                    type="primary",
+                    key="save_uploaded_policy",
+                ):
+                    save_policy_markdown(
+                        uploaded_markdown,
+                        ROOT / "accounts",
+                        overwrite=overwrite_upload,
+                    )
+                    _set_notice(
+                        "success",
+                        f"Imported `{uploaded_policy.account_id}` into accounts/.",
+                    )
+                    st.rerun()
+            except (UnicodeDecodeError, PolicyParseError, OSError, ValueError) as exc:
+                st.error(f"Policy upload failed: {exc}")
 
-    st.subheader("Provider/model quota audit")
-    if usage["by_provider"]:
-        st.dataframe(usage["by_provider"], width="stretch", hide_index=True)
-    else:
-        st.info("No provider usage has been recorded.")
-    if usage["total"]["estimated_cost_usd"] is None:
-        st.caption("Free-tier routes may report no dollar estimate; token/request usage is persisted.")
+with analytics_tab:
+    st.header("Runs, quality, cost, and audit evidence")
+    run_tab, score_tab, usage_tab, data_tab = st.tabs(
+        ["Run history", "Score history", "Tokens & quota", "Data transfer"]
+    )
+    with run_tab:
+        if not runs:
+            st.info("No runs yet. Generate content in **1 · Create content**.")
+        else:
+            st.dataframe(runs, width="stretch", hide_index=True)
+            history_run = st.selectbox(
+                "Inspect run",
+                options=[run["run_id"] for run in runs],
+                format_func=lambda run_id: next(
+                    f"{run['account_id']} · {run['topic'][:60]} · "
+                    f"{run.get('workflow_state') or run['state']} · {run_id[:8]}"
+                    for run in runs
+                    if run["run_id"] == run_id
+                ),
+                key="history_run",
+            )
+            history_draft = store.get_current_draft(history_run)
+            history_request = store.get_content_request(history_run)
+            st.caption(
+                f"Task `{history_request.task.value}` · source "
+                f"`{history_request.source_type.value}` · request `{history_request.request_id}`"
+            )
+            with st.expander("Original topic, brief, and source content"):
+                st.write(f"**Topic:** {history_request.topic}")
+                st.write(f"**Writing brief:** {history_request.instructions or 'None'}")
+                if history_request.source_content:
+                    st.text_area(
+                        "Stored source content",
+                        value=history_request.source_content,
+                        height=150,
+                        disabled=True,
+                        key=f"history_source_{history_run}",
+                    )
+                else:
+                    st.write("No source content was supplied.")
+            st.text_area(
+                "Persisted post",
+                value=render_post(history_draft),
+                height=180,
+                disabled=True,
+            )
+            detail_tabs = st.tabs(["Events", "Revisions", "Critics", "Reviews", "Publishing", "Artifacts"])
+            detail_tabs[0].dataframe(
+                store.get_events(history_run),
+                width="stretch",
+                hide_index=True,
+            )
+            detail_tabs[1].json(store.get_draft_revisions(history_run))
+            detail_tabs[2].json(store.get_critic_results(history_run))
+            detail_tabs[3].dataframe(
+                store.get_review_actions(history_run),
+                width="stretch",
+                hide_index=True,
+            )
+            detail_tabs[4].dataframe(
+                store.get_publish_attempts(history_run),
+                width="stretch",
+                hide_index=True,
+            )
+            detail_tabs[5].json(store.get_artifacts(history_run))
+    with score_tab:
+        score_rows = store.score_history()
+        if score_rows:
+            score_frame = pd.DataFrame(score_rows)
+            score_frame["created_at"] = pd.to_datetime(score_frame["created_at"])
+            st.line_chart(score_frame, x="created_at", y="score", color="account_id")
+            st.dataframe(score_frame, width="stretch", hide_index=True)
+        else:
+            st.info("No Critic scores yet.")
+    with usage_tab:
+        if usage["by_run"]:
+            st.subheader("Per post/account")
+            st.dataframe(usage["by_run"], width="stretch", hide_index=True)
+        else:
+            st.info("No provider usage yet.")
+        if usage["by_provider"]:
+            st.subheader("Per provider/model")
+            st.dataframe(usage["by_provider"], width="stretch", hide_index=True)
+        st.json(usage["total"])
+    with data_tab:
+        st.subheader("Collision-safe SQLite snapshots")
+        st.write(
+            "The application uses **one canonical operational database** so runs and approvals "
+            "stay consistent. Downloads receive a timestamp plus random suffix; the local "
+            "rotation retains at most 20 snapshots."
+        )
+        snapshot_directory = database_path.parent / "snapshots"
+        retained = (
+            len(list(snapshot_directory.glob("content-agent-*.sqlite3")))
+            if snapshot_directory.exists()
+            else 0
+        )
+        st.metric("Retained local snapshots", retained)
+        st.code(str(snapshot_bundle["name"]))
+        st.download_button(
+            "Download prepared unique snapshot",
+            data=snapshot_bundle["data"],
+            file_name=str(snapshot_bundle["name"]),
+            mime="application/vnd.sqlite3",
+            width="stretch",
+            on_click=_invalidate_snapshot_download,
+            key="analytics_snapshot_download",
+        )
+        st.divider()
+        st.subheader("Import a run snapshot")
+        _render_snapshot_import(database_path)
+
+with help_tab:
+    st.header("How to test the complete system")
+    st.markdown(
+        """
+        ### The normal user journey
+
+        1. Open **Kết nối AI** in the sidebar. Leave the password fields blank
+           to use `.env`/Streamlit Secrets, or paste a session-only override.
+           Click **Kiểm tra 3 kết nối** before generating.
+        2. Open **1 · Create content** and keep **Tạo mới từ prompt**. Choose a
+           channel, enter the topic and describe the post you want in natural
+           language. No Markdown is required.
+        3. To transform existing material, switch to **Biến nội dung có sẵn**,
+           then paste text or upload one UTF-8 `.md`/`.txt` source file.
+        4. Research → Copywriter → rule Critic → LLM Critic run automatically.
+           Failed drafts are rewritten no more than twice.
+        5. Open **2 · Review & approve** to inspect score, violations, suggestions,
+           edit the post, and approve it with an audit note.
+        6. Open **3 · Publish**, run dry-run, verify the receipt and destination,
+           then explicitly unlock live delivery if the platform token and ID are real.
+        7. A new channel can be created in **4 · Accounts & policies → Tạo kênh
+           bằng form**. Markdown import/editing is an advanced admin option only.
+
+        ### What gets uploaded where?
+
+        | Place | Upload/input | Purpose |
+        |---|---|---|
+        | Quick Composer → Topic | Subject/campaign topic | Tells Research Agent what to investigate |
+        | Quick Composer → Desired post | Angle, structure, CTA, desired outcome | Natural-language prompt |
+        | Existing content mode | UTF-8 `.md`/`.txt` or pasted text | Material to transform |
+        | Accounts → Guided form | Normal form fields | Add/change a channel without Markdown |
+        | Accounts → Markdown | `.md` account policy | Advanced admin import |
+        | Analytics → Data transfer | Non-empty SQLite snapshot | Move run evidence from Actions |
+        | Kết nối AI | Optional API key in password field | Manual override; blank uses system default |
+        | Publish | Nothing | Sends the approved draft already stored in SQLite |
+
+        ### Safety rules
+
+        - Start with `mock` publishing while learning.
+        - Facebook live publishing targets a managed **Page**, not a personal/clone login.
+        - Never place API keys, passwords, cookies, or tokens in account Markdown.
+        - Source content is stored with the run for review lineage and is treated
+          as untrusted data, not as hidden agent instructions.
+        - `approval_required: true` keeps every passing draft in the human queue.
+        - Dry-run cannot create an external Meta post.
+        - The operational store is one canonical SQLite database. Each download
+          gets a random unique filename; at most 20 local snapshots are retained.
+        """
+    )
+    st.subheader("CLI equivalents for repeatable testing")
+    st.code(
+        """python run.py --list-accounts
+python run.py --account responsible-ai-lab --topic "Campaign topic" --instructions "Use a practical checklist"
+python run.py --account responsible-ai-lab --topic "Campaign topic" `
+  --content-file source.md --content-task repurpose
+python run.py --publish-approved RUN_ID --publish-mode dry-run
+python -m pytest -q""",
+        language="powershell",
+    )
+    st.subheader("Markdown policy anatomy")
+    st.write(
+        "Required sections: Account, Goal, Audience, Platform, Tone, Language, "
+        "Constraints, Examples, Rubric, Threshold, Maximum Length, and Model Route. "
+        "Publishing is optional and defaults to mock."
+    )
+    st.download_button(
+        "Download blank policy template",
+        data=(ROOT / "accounts" / "template.md").read_bytes(),
+        file_name="account-policy-template.md",
+        mime="text/markdown",
+    )

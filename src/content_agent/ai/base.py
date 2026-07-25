@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Generic, Literal, Sequence, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -69,6 +70,7 @@ def parse_structured_text(
             "Provider returned malformed JSON.",
             provider=provider,
             model=model,
+            retryable=True,
         ) from exc
 
     try:
@@ -79,4 +81,5 @@ def parse_structured_text(
             f"Provider JSON failed {response_model.__name__} validation.",
             provider=provider,
             model=model,
+            retryable=True,
         ) from exc

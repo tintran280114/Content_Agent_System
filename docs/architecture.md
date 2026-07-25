@@ -2,16 +2,17 @@
 
 ## Runtime boundary
 
-There are two deliberately separate surfaces:
+There are two user surfaces over one canonical application core:
 
-1. `run.py` is the only content-generation entrypoint. Local cron or GitHub
-   Actions invokes it, it runs a bounded batch, persists evidence, and exits.
-2. `streamlit_app.py` is review-only. It reads SQLite and calls
-   `ReviewService` for audited approve, reject, and edit actions. It has no
-   provider adapters, generation controls, or LLM credentials.
+1. `run.py` is the non-interactive entrypoint for local batches, cron, and
+   GitHub Actions.
+2. `streamlit_app.py` is the guided operator studio for creating content requests,
+   building/importing account policies, running generation, reviewing,
+   approving, dry-running, and explicitly publishing.
 
-Both use the same Python package and SQLite contract. There is no API server,
-JavaScript frontend, or external database.
+Both call the same `PipelineOrchestrator`, policy parser, `ReviewService`,
+publisher router, quota manager, and SQLite contract. Streamlit is not a second
+orchestrator. There is no API server, JavaScript frontend, or external database.
 
 ## One orchestrator
 
@@ -24,15 +25,16 @@ This prevents a second implementation from drifting away from the scheduled
 production path.
 
 ```text
-AccountPolicy
+ContentRequest + AccountPolicy
   -> ResearchBrief (Gemini)
   -> DraftPost revision 0 (Groq)
   -> RuleCriticResult (local)
   -> CriticResult (GitHub Models)
-      | PASS -> PASSED -> MockPublisher -> PUBLISHED
+          | PASS -> PASSED -> policy Publisher -> PUBLISHED / DRY_RUN
+          | PASS + approval_required -> HUMAN_REVIEW -> APPROVED -> guarded UI/CLI Publisher
       | REWRITE and count < 2 -> Groq revision -> Critic loop
       | provider failure after draft / count = 2 -> HUMAN_REVIEW
-          | approve + note -> deterministic guard -> MockPublisher
+          | approve + note -> guarded UI/CLI -> policy-selected Publisher
           | edit -> immutable HUMAN_EDIT revision -> still needs approval
           | reject -> REJECTED
 ```
@@ -49,8 +51,9 @@ account threshold, and the LLM decision to be `pass`.
 - Provider retries do not increment the content rewrite count.
 - Failure before a valid draft fails the run; failure after a valid draft
   preserves it in human review.
-- `Publisher` is a protocol. `MockPublisher` reads authoritative workflow state
-  from SQLite and cannot be tricked with caller-supplied state.
+- `Publisher` is a protocol. `PolicyPublisherRouter` reads the frozen policy and
+  authoritative workflow state from SQLite. Meta adapters reserve an
+  idempotency key before network I/O and require an explicit live-mode gate.
 
 ## SQLite ownership
 
@@ -60,16 +63,21 @@ transactions, and consistent online backups. Key tables are:
 | Table | Purpose |
 |---|---|
 | `runs`, `run_events` | Batch state, provider/model usage, retry/error trail |
-| `policies`, `artifacts` | Frozen policy and structured agent handoffs |
+| `policies`, `artifacts` | Frozen policy, content request, and structured agent handoffs |
 | `workflow_items` | Current safety/review state and two-rewrite cap |
 | `draft_revisions` | Initial AI, AI rewrite, and human-edit payloads |
 | `critic_results` | Rule and LLM score/decision evidence per revision |
 | `review_actions` | Operator/action/note/edit/time audit |
-| `publish_attempts` | Accepted and blocked mock Publisher receipts |
+| `publish_attempts` | Reserved, dry-run, failed, blocked, and published receipts |
 | `evaluation_cases` | Incremental/resumable 10 x 3 progress |
 
 `runs.state` describes execution (`running/completed/failed`), while
 `workflow_items.state` describes content safety (`published/human_review/...`).
+
+The runtime owns one canonical operations database. Snapshot downloads are
+immutable copies with collision-resistant timestamp/random filenames. A bounded
+rotation keeps at most 20 local copies; it does not create 20 independent
+operational databases or split run history.
 
 ## Deployment topology
 

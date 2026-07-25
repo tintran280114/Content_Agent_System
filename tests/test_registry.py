@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.config import DEFAULT_ROUTES, Role
+from content_agent.ai.registry import create_role_provider
 
 
 class RegistryTests(unittest.TestCase):
@@ -33,6 +33,16 @@ class RegistryTests(unittest.TestCase):
             route.selected_model({"GITHUB_MODELS_MODEL": "openai/custom"}),
             "openai/custom",
         )
+
+    def test_policy_can_select_provider_and_model_without_code_change(self) -> None:
+        provider = create_role_provider(
+            Role.RESEARCH,
+            provider="groq",
+            model="openai/gpt-oss-120b",
+            env={"GROQ_API_KEY": "test-only"},
+        )
+        self.assertEqual(provider.provider_name, "groq")
+        self.assertEqual(provider.model, "openai/gpt-oss-120b")
 
 
 if __name__ == "__main__":

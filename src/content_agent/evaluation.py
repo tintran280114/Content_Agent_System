@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .orchestrator import PipelineOrchestrator, PipelineRunError
 from .platform import SQLiteRunStore
@@ -25,7 +26,7 @@ class EvaluationRunner:
 
     @staticmethod
     def case_key(evaluation_id: str, account_id: str, topic: str) -> str:
-        raw = f"{evaluation_id}\0{account_id}\0{topic}".encode("utf-8")
+        raw = f"{evaluation_id}\0{account_id}\0{topic}".encode()
         return hashlib.sha256(raw).hexdigest()[:24]
 
     def run(
@@ -38,9 +39,7 @@ class EvaluationRunner:
         limit: int | None = None,
         progress: Callable[[dict], None] | None = None,
     ) -> dict:
-        existing = {
-            row["case_key"]: row for row in self.store.list_evaluation_cases(evaluation_id)
-        }
+        existing = {row["case_key"]: row for row in self.store.list_evaluation_cases(evaluation_id)}
         cases = []
         for policy_path in policy_paths:
             policy = load_policy(policy_path)
@@ -120,18 +119,12 @@ class EvaluationRunner:
             "completed": len(completed),
             "failed": len(failed),
             "pending": len(cases) - len(completed) - len(failed),
-            "quota_stopped": any(
-                case.get("error_code") == "quota_exhausted" for case in failed
-            ),
+            "quota_stopped": any(case.get("error_code") == "quota_exhausted" for case in failed),
             "average_score": round(sum(scores) / len(scores), 2) if scores else None,
             "workflow_states": {
                 state: sum(1 for row in completed_runs if row.get("workflow_state") == state)
                 for state in sorted(
-                    {
-                        row.get("workflow_state")
-                        for row in completed_runs
-                        if row.get("workflow_state")
-                    }
+                    {row.get("workflow_state") for row in completed_runs if row.get("workflow_state")}
                 )
             },
             "usage": usage,
@@ -154,14 +147,8 @@ class EvaluationRunner:
         usage = self._event_usage(events)
         provider_usage = self._provider_usage(events)
         generations = [research.metadata.model_dump(mode="json")]
-        generations.extend(
-            revision["payload"]["metadata"]
-            for revision in draft_revisions
-        )
-        generations.extend(
-            result["payload"]["metadata"]
-            for result in critic_results
-        )
+        generations.extend(revision["payload"]["metadata"] for revision in draft_revisions)
+        generations.extend(result["payload"]["metadata"] for result in critic_results)
         return {
             "case_key": case["case_key"],
             "run_id": run_id,
@@ -186,8 +173,7 @@ class EvaluationRunner:
         provider_events = [event for event in events if event.get("provider")]
         requests = sum(event["state"] == "started" for event in provider_events)
         retries = sum(
-            event["state"] == "failed" and bool(event.get("retryable"))
-            for event in provider_events
+            event["state"] == "failed" and bool(event.get("retryable")) for event in provider_events
         )
         completed = [event for event in provider_events if event["state"] == "completed"]
         costs = [
@@ -210,9 +196,7 @@ class EvaluationRunner:
         groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         for event in events:
             if event.get("provider"):
-                groups[(str(event["provider"]), str(event.get("model") or "unknown"))].append(
-                    event
-                )
+                groups[(str(event["provider"]), str(event.get("model") or "unknown"))].append(event)
         return [
             {
                 "provider": provider,
@@ -256,9 +240,7 @@ class EvaluationRunner:
         requests = sum(int(row.get("request_count") or 0) for row in rows)
         retries = sum(int(row.get("retry_count") or 0) for row in rows)
         costs = [
-            float(row["estimated_cost_usd"])
-            for row in rows
-            if row.get("estimated_cost_usd") is not None
+            float(row["estimated_cost_usd"]) for row in rows if row.get("estimated_cost_usd") is not None
         ]
         return {
             "input_tokens": sum(int(row.get("input_tokens") or 0) for row in rows),
@@ -288,9 +270,7 @@ class EvaluationRunner:
                         state: sum(record["workflow_state"] == state for record in account_records)
                         for state in states
                     },
-                    "usage": EvaluationRunner._combine_usage(
-                        record["usage"] for record in account_records
-                    ),
+                    "usage": EvaluationRunner._combine_usage(record["usage"] for record in account_records),
                 }
             )
         return summaries

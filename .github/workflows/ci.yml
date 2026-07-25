@@ -19,10 +19,19 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -e ".[dev]"
       - name: CLI contract
         run: |
           python run.py --help
           python run.py --list-accounts
+          python scripts/provider_spike.py --dry-run
+      - name: Lint and format
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
       - name: Offline unit, integration, and security tests
         run: python -m unittest discover -s tests -v
+      - name: Build and dependency integrity
+        run: |
+          python -m build
+          python -m pip check

@@ -5,20 +5,21 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
 
-from ..ai.models import CriticResult, DraftPost, ResearchBrief, TokenUsage
+from ..ai.models import ContentRequest, CriticResult, DraftPost, ResearchBrief, TokenUsage
 from ..critics import RuleCriticResult
 from ..policy import AccountPolicy
 from .contracts import EventState, RunEvent, RunState, RunStep
 
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.4"
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -129,7 +130,15 @@ CREATE TABLE IF NOT EXISTS publish_attempts (
     publish_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
     draft_id TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('published', 'blocked')),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    destination TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'published', 'blocked', 'dry_run', 'failed')
+    ),
+    remote_post_id TEXT,
+    topic_tag TEXT,
+    http_status INTEGER,
+    attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 0),
     reason TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -151,12 +160,13 @@ CREATE INDEX IF NOT EXISTS idx_workflow_state ON workflow_items(state, updated_a
 CREATE INDEX IF NOT EXISTS idx_draft_revisions_run ON draft_revisions(run_id, revision);
 CREATE INDEX IF NOT EXISTS idx_critic_results_run ON critic_results(run_id, revision);
 CREATE INDEX IF NOT EXISTS idx_review_actions_run ON review_actions(run_id, action_id);
+CREATE INDEX IF NOT EXISTS idx_publish_attempts_run ON publish_attempts(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_evaluation_id ON evaluation_cases(evaluation_id, status);
 """
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class SQLiteRunStore:
@@ -187,11 +197,55 @@ class SQLiteRunStore:
         with self._connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(SQLITE_SCHEMA)
+            self._migrate_publish_attempts(connection)
             connection.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (SCHEMA_VERSION,),
             )
+
+    @staticmethod
+    def _migrate_publish_attempts(connection: sqlite3.Connection) -> None:
+        columns = {
+            str(row["name"]) for row in connection.execute("PRAGMA table_info(publish_attempts)").fetchall()
+        }
+        if "idempotency_key" in columns:
+            if "topic_tag" not in columns:
+                connection.execute("ALTER TABLE publish_attempts ADD COLUMN topic_tag TEXT")
+            return
+        connection.execute("ALTER TABLE publish_attempts RENAME TO publish_attempts_legacy")
+        connection.executescript(
+            """
+            CREATE TABLE publish_attempts (
+                publish_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+                draft_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                destination TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('pending', 'published', 'blocked', 'dry_run', 'failed')
+                ),
+                remote_post_id TEXT,
+                topic_tag TEXT,
+                http_status INTEGER,
+                attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 0),
+                reason TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO publish_attempts(
+                publish_id, run_id, draft_id, idempotency_key, destination, status,
+                remote_post_id, topic_tag, reason, payload_json, created_at
+            )
+            SELECT
+                publish_id, run_id, draft_id, 'legacy:' || publish_id, 'mock', status,
+                NULL, NULL, reason, payload_json, created_at
+            FROM publish_attempts_legacy;
+            DROP TABLE publish_attempts_legacy;
+            CREATE INDEX IF NOT EXISTS idx_publish_attempts_run
+                ON publish_attempts(run_id, created_at);
+            """
+        )
 
     def backup_bytes(self) -> bytes:
         """Return a consistent SQLite snapshot, including committed WAL data."""
@@ -214,9 +268,11 @@ class SQLiteRunStore:
         topic: str,
         policy: AccountPolicy,
         source_path: str | Path,
+        request: ContentRequest | None = None,
     ) -> None:
         now = _utc_now().isoformat()
         policy_json = policy.model_dump_json()
+        content_request = request or ContentRequest.from_inputs(topic=topic)
         with self._connection() as connection:
             connection.execute(
                 "INSERT INTO runs(run_id, account_id, topic, state, created_at, updated_at) "
@@ -241,6 +297,16 @@ class SQLiteRunStore:
                 "INSERT INTO artifacts(run_id, kind, entity_id, payload_json, created_at) "
                 "VALUES(?, 'account_policy', ?, ?, ?)",
                 (str(run_id), policy.account_id, policy_json, now),
+            )
+            connection.execute(
+                "INSERT INTO artifacts(run_id, kind, entity_id, payload_json, created_at) "
+                "VALUES(?, 'content_request', ?, ?, ?)",
+                (
+                    str(run_id),
+                    str(content_request.request_id),
+                    content_request.model_dump_json(),
+                    now,
+                ),
             )
 
     def save_artifact(
@@ -347,9 +413,7 @@ class SQLiteRunStore:
 
     def get_run(self, run_id: UUID | str) -> dict[str, Any] | None:
         with self._connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM runs WHERE run_id = ?", (str(run_id),)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM runs WHERE run_id = ?", (str(run_id),)).fetchone()
         return dict(row) if row else None
 
     def get_events(self, run_id: UUID | str) -> list[dict[str, Any]]:
@@ -503,6 +567,19 @@ class SQLiteRunStore:
             raise KeyError(f"policy not found for run_id: {run_id}")
         return AccountPolicy.model_validate_json(str(row["payload_json"]))
 
+    def get_content_request(self, run_id: UUID | str) -> ContentRequest:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM artifacts WHERE run_id = ? AND kind = 'content_request'",
+                (str(run_id),),
+            ).fetchone()
+        if not row:
+            run = self.get_run(run_id)
+            if not run:
+                raise KeyError(f"content request not found for run_id: {run_id}")
+            return ContentRequest.from_inputs(topic=str(run["topic"]))
+        return ContentRequest.model_validate_json(str(row["payload_json"]))
+
     def get_research(self, run_id: UUID | str) -> ResearchBrief:
         with self._connection() as connection:
             row = connection.execute(
@@ -630,19 +707,60 @@ class SQLiteRunStore:
             connection.execute(
                 """
                 INSERT INTO publish_attempts(
-                    publish_id, run_id, draft_id, status, reason, payload_json, created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                    publish_id, run_id, draft_id, idempotency_key, destination, status,
+                    remote_post_id, topic_tag, http_status, attempt_count, reason,
+                    payload_json, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(payload["publish_id"]),
                     str(payload["run_id"]),
                     str(payload["draft_id"]),
+                    str(payload["idempotency_key"]),
+                    str(payload["destination"]),
                     str(payload["status"]),
+                    payload.get("remote_post_id"),
+                    payload.get("topic_tag"),
+                    payload.get("http_status"),
+                    int(payload.get("attempt_count", 1)),
                     str(payload["reason"]),
                     receipt.model_dump_json(),
                     _utc_now().isoformat(),
                 ),
             )
+
+    def update_publish_attempt(self, *, receipt: BaseModel) -> None:
+        payload = receipt.model_dump(mode="json")
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE publish_attempts
+                SET status = ?, remote_post_id = ?, topic_tag = ?, http_status = ?,
+                    attempt_count = ?, reason = ?, payload_json = ?
+                WHERE publish_id = ? AND idempotency_key = ?
+                """,
+                (
+                    str(payload["status"]),
+                    payload.get("remote_post_id"),
+                    payload.get("topic_tag"),
+                    payload.get("http_status"),
+                    int(payload.get("attempt_count", 1)),
+                    str(payload["reason"]),
+                    receipt.model_dump_json(),
+                    str(payload["publish_id"]),
+                    str(payload["idempotency_key"]),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"publish attempt not found: {payload['idempotency_key']}")
+
+    def get_publish_attempt_by_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM publish_attempts WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def list_review_queue(self) -> list[dict[str, Any]]:
         with self._connection() as connection:

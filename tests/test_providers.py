@@ -5,12 +5,10 @@ import unittest
 from types import SimpleNamespace
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.base import ChatMessage
 from content_agent.ai.errors import ErrorCode, ProviderError
 from content_agent.ai.models import DraftPayload, ResearchPayload
 from content_agent.ai.providers import GeminiProvider, GitHubModelsProvider, GroqProvider
-
 
 RESEARCH = {
     "summary": "A sufficiently detailed structured response for adapter testing.",
@@ -88,7 +86,25 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertEqual(response.metadata.provider, "gemini")
         self.assertIn("response_json_schema", fake_models.kwargs["config"].model_fields_set)
 
-    def test_groq_requests_json_mode(self) -> None:
+    def test_groq_gpt_oss_requests_strict_json_schema(self) -> None:
+        fake = FakeOpenAIClient(DRAFT)
+        provider = GroqProvider(api_key=None, model="openai/gpt-oss-120b", client=fake)
+        response = provider.generate(
+            messages=self.messages,
+            response_model=DraftPayload,
+            role="copywriter",
+            prompt_version="test-v1",
+        )
+        self.assertEqual(response.metadata.provider, "groq")
+        response_format = fake.completions.kwargs["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        schema = response_format["json_schema"]["schema"]
+        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(fake.completions.kwargs["reasoning_effort"], "low")
+
+    def test_groq_other_models_retain_json_object_fallback(self) -> None:
         fake = FakeOpenAIClient(DRAFT)
         provider = GroqProvider(api_key=None, model="groq-test", client=fake)
         response = provider.generate(
@@ -133,6 +149,7 @@ class ProviderAdapterTests(unittest.TestCase):
                 prompt_version="test-v1",
             )
         self.assertEqual(raised.exception.code, ErrorCode.MALFORMED_RESPONSE)
+        self.assertTrue(raised.exception.retryable)
 
 
 if __name__ == "__main__":

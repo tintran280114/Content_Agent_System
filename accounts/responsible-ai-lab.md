@@ -2,7 +2,8 @@
 
 ## Account
 - account_id: responsible-ai-lab
-- spec_version: 0.1
+- spec_version: 0.2
+- active: true
 
 ## Goal
 Teach small teams practical and responsible ways to use AI for social content.
@@ -11,7 +12,7 @@ Teach small teams practical and responsible ways to use AI for social content.
 Startup founders and content leads who need auditable AI workflows.
 
 ## Platform
-LinkedIn
+Threads
 
 ## Tone
 Practical, calm, and evidence-aware.
@@ -23,7 +24,7 @@ English
 - Do not promise guaranteed business results.
 - State uncertainty when evidence is limited.
 - Keep a human accountable for final publication.
-- Keep the post under 900 characters.
+- Keep the post under 500 characters.
 
 ## Banned Terms
 - revolutionary
@@ -46,9 +47,18 @@ English
 80
 
 ## Maximum Length
-900
+500
 
 ## Model Route
-- research: gemini
-- copywriter: groq
-- critic: github_models
+- research: gemini@gemini-3.1-flash-lite
+- copywriter: groq@openai/gpt-oss-120b
+- critic: github_models@openai/gpt-4o-mini
+
+## Publishing
+- adapter: threads
+- target_id: 000000000000002
+- credential_ref: THREADS_RESPONSIBLE_AI_TOKEN
+- approval_required: true
+- topic_tag: Responsible AI
+- topic_tag_candidates: Responsible AI | AI Tools | AI for Business
+- trend_search: true

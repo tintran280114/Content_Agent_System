@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     MISSING_CREDENTIAL = "missing_credential"
     AUTHENTICATION = "authentication"
     PERMISSION_DENIED = "permission_denied"
@@ -65,9 +65,27 @@ def normalize_provider_exception(exc: Exception, *, provider: str, model: str) -
     if isinstance(exc, ProviderError):
         return exc
 
-    status = getattr(exc, "status_code", None)
+    # HTTP clients commonly expose ``status_code`` while Google GenAI's
+    # APIError exposes the same HTTP value as ``code``. Normalizing both keeps
+    # transient 5xx/deadline failures retryable without importing any SDK.
+    raw_status = getattr(exc, "status_code", None)
+    if raw_status is None:
+        raw_status = getattr(exc, "code", None)
+    try:
+        status = int(raw_status) if raw_status is not None else None
+    except (TypeError, ValueError):
+        status = None
+
     body = getattr(exc, "body", None)
     body_text = str(body or "").lower()
+    metadata_text = " ".join(
+        str(value or "").lower()
+        for value in (
+            getattr(exc, "status", None),
+            getattr(exc, "message", None),
+            getattr(exc, "details", None),
+        )
+    )
     chain_parts: list[str] = []
     current: BaseException | None = exc
     visited: set[int] = set()
@@ -76,12 +94,25 @@ def normalize_provider_exception(exc: Exception, *, provider: str, model: str) -
         chain_parts.append(type(current).__name__.lower())
         chain_parts.append(str(current).lower())
         current = current.__cause__ or current.__context__
-    combined = " ".join([body_text, *chain_parts])
+    combined = " ".join([body_text, metadata_text, *chain_parts])
 
     if status == 401:
         code, safe, retryable = ErrorCode.AUTHENTICATION, "Provider rejected the credential.", False
     elif status == 403:
         code, safe, retryable = ErrorCode.PERMISSION_DENIED, "Credential has no access to this model.", False
+    elif any(
+        marker in combined
+        for marker in (
+            "failed_generation",
+            "generated json does not match",
+            "json_validate_failed",
+        )
+    ):
+        code, safe, retryable = (
+            ErrorCode.MALFORMED_RESPONSE,
+            "Provider could not generate schema-valid JSON.",
+            True,
+        )
     elif "quota" in combined:
         code, safe, retryable = (
             ErrorCode.QUOTA_EXHAUSTED,
@@ -90,7 +121,13 @@ def normalize_provider_exception(exc: Exception, *, provider: str, model: str) -
         )
     elif status == 429 or "rate limit" in combined:
         code, safe, retryable = ErrorCode.RATE_LIMIT, "Provider rate limit or quota was reached.", True
-    elif status in {408, 504} or "timeout" in combined or "timed out" in combined:
+    elif (
+        status in {408, 504}
+        or "timeout" in combined
+        or "timed out" in combined
+        or "deadline_exceeded" in combined
+        or "deadline exceeded" in combined
+    ):
         code, safe, retryable = ErrorCode.TIMEOUT, "Provider request timed out.", True
     elif "unavailable_model" in combined or "model_not_found" in combined or "not found" in combined:
         code, safe, retryable = ErrorCode.UNAVAILABLE_MODEL, "Configured model is unavailable.", False

@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 
 import _bootstrap  # noqa: F401
-
 from content_agent.ai.errors import ErrorCode, ProviderError, normalize_provider_exception
 
 
@@ -16,6 +15,14 @@ class FakeHttpError(Exception):
 
 class ConnectError(Exception):
     pass
+
+
+class GoogleDeadlineError(Exception):
+    def __init__(self) -> None:
+        super().__init__("unsafe upstream details intentionally ignored")
+        self.code = 504
+        self.status = "DEADLINE_EXCEEDED"
+        self.message = "upstream deadline detail must stay private"
 
 
 class ErrorTests(unittest.TestCase):
@@ -54,6 +61,36 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(error.code, ErrorCode.NETWORK)
         self.assertTrue(error.retryable)
         self.assertEqual(str(error), "Could not connect to provider.")
+        self.assertNotIn("upstream", str(error))
+
+    def test_schema_generation_400_is_safe_and_retryable(self) -> None:
+        error = normalize_provider_exception(
+            FakeHttpError(
+                400,
+                {
+                    "error": {
+                        "message": "Generated JSON does not match the expected schema.",
+                        "failed_generation": "<unsafe model output>",
+                    }
+                },
+            ),
+            provider="groq",
+            model="openai/gpt-oss-120b",
+        )
+        self.assertEqual(error.code, ErrorCode.MALFORMED_RESPONSE)
+        self.assertTrue(error.retryable)
+        self.assertNotIn("unsafe", str(error))
+
+    def test_google_code_is_normalized_as_retryable_timeout(self) -> None:
+        error = normalize_provider_exception(
+            GoogleDeadlineError(),
+            provider="gemini",
+            model="gemini-3.1-flash-lite",
+        )
+        self.assertEqual(error.code, ErrorCode.TIMEOUT)
+        self.assertEqual(error.status_code, 504)
+        self.assertTrue(error.retryable)
+        self.assertEqual(str(error), "Provider request timed out.")
         self.assertNotIn("upstream", str(error))
 
     def test_error_dict_has_handoff_fields(self) -> None:

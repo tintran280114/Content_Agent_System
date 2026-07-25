@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import time
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from typing import Literal
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
 
 from ..base import ChatMessage, ProviderResponse, SchemaT, StructuredProvider, parse_structured_text
 from ..errors import ProviderError, missing_credential, normalize_provider_exception

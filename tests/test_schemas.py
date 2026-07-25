@@ -4,9 +4,9 @@ import json
 import unittest
 from pathlib import Path
 
-import _bootstrap  # noqa: F401
 from pydantic import ValidationError
 
+import _bootstrap  # noqa: F401
 from content_agent.ai.models import (
     CriticResult,
     DraftPost,

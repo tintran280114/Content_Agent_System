@@ -17,10 +17,12 @@ class ReviewService:
         *,
         publisher: Publisher | None = None,
         rule_critic: RuleCritic | None = None,
+        publish_on_approve: bool = True,
     ) -> None:
         self.store = store
         self.publisher = publisher or MockPublisher(store)
         self.rule_critic = rule_critic or RuleCritic()
+        self.publish_on_approve = publish_on_approve
 
     @staticmethod
     def _identity(actor: str) -> str:
@@ -36,7 +38,7 @@ class ReviewService:
         actor: str,
         note: str,
         expected_version: int | None = None,
-    ) -> PublishReceipt:
+    ) -> PublishReceipt | None:
         actor = self._identity(actor)
         note = note.strip()
         if not note:
@@ -62,7 +64,7 @@ class ReviewService:
             actor=actor,
             note=note,
         )
-        return self.publisher.publish(run_id)
+        return self.publisher.publish(run_id) if self.publish_on_approve else None
 
     def reject(
         self,

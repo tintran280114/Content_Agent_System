@@ -10,9 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-import _bootstrap  # noqa: F401
-
 import run as run_module
+
+import _bootstrap  # noqa: F401
 from content_agent.orchestrator import PipelineRunError
 from content_agent.platform import RunStep
 
@@ -34,6 +34,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("--all", completed.stdout)
         self.assertIn("--pipeline", completed.stdout)
         self.assertIn("--database", completed.stdout)
+        self.assertIn("--instructions", completed.stdout)
+        self.assertIn("--content-file", completed.stdout)
+        self.assertIn("--content-task", completed.stdout)
         self.assertIn("Default: full", completed.stdout)
         self.assertIn("artifacts/content_agent.sqlite3", completed.stdout.replace("\\", "/"))
 
@@ -49,6 +52,9 @@ class CliTests(unittest.TestCase):
         lines = [line for line in completed.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 3)
         self.assertTrue(any("responsible-ai-lab" in line for line in lines))
+        self.assertTrue(any("credential_ref=THREADS_RESPONSIBLE_AI_TOKEN" in line for line in lines))
+        self.assertTrue(any("credential_present=" in line for line in lines))
+        self.assertTrue(any("topic_tag_mode=trend" in line for line in lines))
 
     def test_missing_policy_has_actionable_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -72,14 +78,41 @@ class CliTests(unittest.TestCase):
         self.assertIn("Policy error", completed.stderr)
         self.assertIn("does not exist", completed.stderr)
 
+    def test_inactive_account_is_rejected_before_any_provider_call(self) -> None:
+        template = (ROOT / "accounts" / "template.md").read_text(encoding="utf-8")
+        template = template.replace("replace-with-slug", "paused-account")
+        template = template.replace("- active: true", "- active: false")
+        with tempfile.TemporaryDirectory() as directory:
+            accounts_dir = Path(directory) / "accounts"
+            accounts_dir.mkdir()
+            (accounts_dir / "paused-account.md").write_text(template, encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUN),
+                    "--account",
+                    "paused-account",
+                    "--accounts-dir",
+                    str(accounts_dir),
+                    "--database",
+                    str(Path(directory) / "unused.sqlite3"),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("inactive", completed.stderr)
+
     def test_all_accounts_stops_immediately_when_quota_is_exhausted(self) -> None:
         calls: list[str] = []
 
         class QuotaPipeline:
-            def __init__(self, store) -> None:
+            def __init__(self, store, **_) -> None:
                 self.store = store
 
-            def run(self, *, topic: str, policy_path: Path, mode) -> None:
+            def run(self, *, topic: str, policy_path: Path, mode, **_) -> None:
                 calls.append(policy_path.name)
                 raise PipelineRunError(
                     uuid4(),
@@ -103,6 +136,51 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 4)
         self.assertEqual(len(calls), 1)
+
+    def test_content_file_and_task_are_passed_to_the_canonical_pipeline(self) -> None:
+        captured: dict[str, object] = {}
+
+        class CapturingPipeline:
+            def __init__(self, store, **_) -> None:
+                self.store = store
+
+            def run(self, **kwargs) -> None:
+                captured.update(kwargs)
+                raise PipelineRunError(
+                    uuid4(),
+                    RunStep.RESEARCH,
+                    "quota_exhausted",
+                    "Stop after input capture.",
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "release-notes.md"
+            source.write_text("Offline mode launches on Monday.", encoding="utf-8")
+            with patch.object(run_module, "PipelineOrchestrator", CapturingPipeline):
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    exit_code = run_module.main(
+                        [
+                            "--account",
+                            "responsible-ai-lab",
+                            "--database",
+                            str(Path(directory) / "input.sqlite3"),
+                            "--topic",
+                            "Offline launch",
+                            "--instructions",
+                            "Use one practical CTA.",
+                            "--content-file",
+                            str(source),
+                            "--content-task",
+                            "repurpose",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 4)
+        self.assertEqual(captured["topic"], "Offline launch")
+        self.assertEqual(captured["instructions"], "Use one practical CTA.")
+        self.assertEqual(captured["source_content"], "Offline mode launches on Monday.")
+        self.assertEqual(captured["source_name"], "release-notes.md")
+        self.assertEqual(captured["task"], "repurpose")
 
 
 if __name__ == "__main__":

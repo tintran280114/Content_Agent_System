@@ -6,7 +6,6 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "provider_spike.py"
 SPEC = importlib.util.spec_from_file_location("provider_spike", SCRIPT)
 if SPEC is None or SPEC.loader is None:

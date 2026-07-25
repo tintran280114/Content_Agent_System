@@ -2,15 +2,21 @@
 
 ## Local operation
 
-Generate content with the CLI, then open the review surface:
+Open the guided studio:
 
 ```cmd
-python run.py --all --topic "How small teams can use AI responsibly"
 streamlit run streamlit_app.py
 ```
 
-Both default to `artifacts/content_agent.sqlite3`. Streamlit performs no LLM
-calls and needs no provider credentials.
+Use **1 · Create content → Tạo mới từ prompt** to choose a channel, enter a
+topic, and describe the desired post in natural language. No Markdown is
+required. Switch to existing-content mode only when repurposing, rewriting, or
+summarizing pasted/uploaded source material. The UI and CLI run the same
+orchestrator and default to `artifacts/content_agent.sqlite3`. Provider
+credentials come from `.env` or session-only password fields.
+Manual session values take priority; blank fields use `.env` or Streamlit
+Secrets. Use **Kiểm tra 3 kết nối** before generation to distinguish a missing
+or rejected key from blocked outbound network.
 
 ## Community Cloud settings
 
@@ -20,17 +26,19 @@ calls and needs no provider credentials.
 | Python | `3.11` |
 | Dependencies | root `requirements.txt` |
 | Configuration | root `.streamlit/config.toml` |
-| LLM secrets | none |
+| LLM secrets | `GEMINI_API_KEY`, `GROQ_API_KEY`, `GITHUB_MODELS_TOKEN` |
 
 1. Push the chosen branch to GitHub.
 2. Create a Community Cloud app and enter the branch manually if the dropdown
    has not refreshed.
 3. Use root entrypoint `streamlit_app.py` and Python 3.11.
-4. Deploy; an empty SQLite file is created automatically.
-5. Download and expand `content-agent-latest` from a GitHub Actions run.
-6. Upload `content_agent.sqlite3` through **Cloud snapshot handoff**.
-7. Review, edit, approve, or reject queued items.
-8. Download the reviewed SQLite evidence before rebooting or redeploying.
+4. Add the three provider values in Streamlit Secrets.
+5. Deploy; the studio can now generate a run from a topic or supplied content.
+6. Optionally download and expand `content-agent-latest` from GitHub Actions,
+   then upload its non-empty SQLite through **Analytics → Data transfer**.
+7. Review, edit, approve, dry-run, and publish through the numbered tabs.
+8. Download the unique SQLite snapshot before rebooting or redeploying. Names
+   include a timestamp and random suffix; local rotation retains at most 20.
 
 The uploaded file is validated for SQLite format, integrity, size, and required
 tables before replacement.

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "content-agent-system"
-version = "0.3.0"
-description = "CLI-first social content agent with SQLite and Streamlit operations."
+version = "0.7.0"
+description = "Policy-driven social content agent with a guided Streamlit studio."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
     "google-genai>=2.12,<3",
     "groq>=1.5,<2",
     "openai>=2.46,<3",
+    "httpx>=0.28,<1",
     "streamlit==1.59.2",
 ]
 
@@ -35,3 +36,8 @@ line-length = 110
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"run.py" = ["E402"]
+"streamlit_app.py" = ["E402"]
+"scripts/*.py" = ["E402"]
