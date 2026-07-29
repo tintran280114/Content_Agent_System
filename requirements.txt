@@ -3,3 +3,5 @@ streamlit>=1.30.0
 pandas
 google-generativeai>=0.3.0
 psycopg2-binary
+requests
+
