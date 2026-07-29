@@ -8,11 +8,17 @@ There are two user surfaces over one canonical application core:
    GitHub Actions.
 2. `streamlit_app.py` is the guided operator studio for creating content requests,
    building/importing account policies, running generation, reviewing,
-   approving, dry-running, and explicitly publishing.
+approving, dry-running, and explicitly publishing.
 
 Both call the same `PipelineOrchestrator`, policy parser, `ReviewService`,
 publisher router, quota manager, and SQLite contract. Streamlit is not a second
 orchestrator. There is no API server, JavaScript frontend, or external database.
+
+`ContentMarkdownDocument` is the UI ingestion boundary. `mode: generate` maps
+Markdown sections to `ContentRequest` and enters `PipelineOrchestrator`.
+`mode: publish` creates an operator-origin `DraftPost`, runs deterministic
+policy checks, and enters the same review/publisher state machine without an
+LLM call.
 
 ## One orchestrator
 
@@ -39,6 +45,13 @@ ContentRequest + AccountPolicy
           | reject -> REJECTED
 ```
 
+```text
+Publish-ready Content Markdown + AccountPolicy
+  -> operator DraftPost -> RuleCritic
+  -> HUMAN_REVIEW (approval policy or hard-rule issue) / PASSED
+  -> same guarded Publisher
+```
+
 Final `PASS` requires deterministic rules to pass, the score to meet the
 account threshold, and the LLM decision to be `pass`.
 
@@ -54,6 +67,13 @@ account threshold, and the LLM decision to be `pass`.
 - `Publisher` is a protocol. `PolicyPublisherRouter` reads the frozen policy and
   authoritative workflow state from SQLite. Meta adapters reserve an
   idempotency key before network I/O and require an explicit live-mode gate.
+- The UI no longer asks for a typed confirmation phrase. State, approval,
+  target, credential, permission and idempotency checks remain server-side.
+- Meta HTTP uses bounded timeouts, connection keep-alive, retry/backoff and safe
+  errors. No WebSocket/SSE connection exists in this architecture.
+- `ThreadsTokenManager` reads expiry metadata, refreshes an unexpired
+  long-lived token inside a configurable window, and atomically rotates an
+  encrypted token store. The encryption key remains outside SQLite/Markdown.
 
 ## SQLite ownership
 
@@ -65,7 +85,7 @@ transactions, and consistent online backups. Key tables are:
 | `runs`, `run_events` | Batch state, provider/model usage, retry/error trail |
 | `policies`, `artifacts` | Frozen policy, content request, and structured agent handoffs |
 | `workflow_items` | Current safety/review state and two-rewrite cap |
-| `draft_revisions` | Initial AI, AI rewrite, and human-edit payloads |
+| `draft_revisions` | Initial AI, AI rewrite, Markdown import, and human-edit payloads |
 | `critic_results` | Rule and LLM score/decision evidence per revision |
 | `review_actions` | Operator/action/note/edit/time audit |
 | `publish_attempts` | Reserved, dry-run, failed, blocked, and published receipts |

@@ -6,6 +6,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from secrets import token_urlsafe
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -18,9 +19,24 @@ from dotenv import load_dotenv
 
 from content_agent.ai.config import DEFAULT_ROUTES, Role
 from content_agent.ai.connectivity import probe_all_connections
-from content_agent.ai.models import ContentRequest, ContentTask
+from content_agent.ai.models import ContentMode
 from content_agent.ai.registry import create_role_provider
+from content_agent.content_markdown import (
+    GENERATE_TEMPLATE,
+    PUBLISH_TEMPLATE,
+    ContentMarkdownError,
+    import_publish_document,
+    metadata_summary,
+    parse_content_markdown,
+)
 from content_agent.critics import render_post
+from content_agent.meta_auth import (
+    EncryptedTokenStore,
+    MetaAuthError,
+    ThreadsOAuthClient,
+    ThreadsTokenManager,
+    build_threads_authorization_url,
+)
 from content_agent.orchestrator import PipelineMode, PipelineOrchestrator, PipelineRunError
 from content_agent.platform import SQLiteRunStore
 from content_agent.policy import PolicyParseError, load_policy, parse_policy_text
@@ -30,7 +46,11 @@ from content_agent.policy_builder import (
     save_policy_markdown,
     split_lines,
 )
-from content_agent.publisher import PolicyPublisherRouter, PublishError
+from content_agent.publisher import (
+    EnvironmentCredentialResolver,
+    PolicyPublisherRouter,
+    PublishError,
+)
 from content_agent.review import ReviewService
 from content_agent.snapshot import install_sqlite_snapshot, save_rotating_snapshot
 
@@ -46,6 +66,16 @@ PROVIDER_CREDENTIALS = {
     "GROQ_API_KEY": "Groq · Copywriter",
     "GITHUB_MODELS_TOKEN": "GitHub Models · Critic",
 }
+
+META_CONFIGURATION = (
+    "CONTENT_AGENT_TOKEN_ENCRYPTION_KEY",
+    "CONTENT_AGENT_TOKEN_STORE",
+    "META_REQUEST_TIMEOUT_SECONDS",
+    "THREADS_APP_ID",
+    "THREADS_APP_SECRET",
+    "THREADS_REDIRECT_URI",
+    "THREADS_TOKEN_REFRESH_DAYS",
+)
 
 
 def _inject_styles() -> None:
@@ -263,11 +293,17 @@ def _credential_source(key: str) -> str:
 
 def _runtime_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     runtime = dict(os.environ)
-    for credential in PROVIDER_CREDENTIALS:
+    for credential in (*PROVIDER_CREDENTIALS, *META_CONFIGURATION):
         override = st.session_state.get(f"runtime_secret_{credential}", "").strip()
         value = override or _configured_secret(credential)
         if value:
             runtime[credential] = value
+    for key, raw_value in st.session_state.items():
+        if key.startswith("runtime_secret_") and str(raw_value or "").strip():
+            runtime[key.removeprefix("runtime_secret_")] = str(raw_value).strip()
+        if key.startswith("runtime_expiry_") and str(raw_value or "").strip():
+            credential_ref = key.removeprefix("runtime_expiry_")
+            runtime[f"{credential_ref}_EXPIRES_AT"] = str(raw_value).strip()
     if extra:
         runtime.update({key: value for key, value in extra.items() if value.strip()})
     return runtime
@@ -286,6 +322,245 @@ def _clear_manual_credentials() -> None:
         "level": "info",
         "message": "Đã xóa key nhập tay; app đang dùng key mặc định của hệ thống.",
     }
+
+
+def _render_social_connections(catalog: dict[str, tuple[Path, object]]) -> None:
+    """Render platform credentials without exposing their values."""
+
+    facebook = [
+        (account_id, policy)
+        for account_id, (_, policy) in catalog.items()
+        if policy.publishing.adapter == "facebook_page"
+    ]
+    threads = [
+        (account_id, policy)
+        for account_id, (_, policy) in catalog.items()
+        if policy.publishing.adapter == "threads"
+    ]
+    st.caption(
+        "Token nhập tay chỉ ở trong browser session. Token lưu lâu dài được mã hóa "
+        "và không nằm trong Markdown hoặc SQLite."
+    )
+    st.markdown("**Facebook Pages**")
+    if not facebook:
+        st.caption("Chưa có Facebook Page policy.")
+    for account_id, policy in facebook:
+        credential_ref = policy.publishing.credential_ref
+        configured = bool(credential_ref and _runtime_env().get(credential_ref, "").strip())
+        icon = "✅" if configured else "⚠️"
+        st.caption(
+            f"{icon} `{account_id}` · Page `{policy.publishing.target_id}` · "
+            f"`{credential_ref or 'no credential_ref'}`"
+        )
+
+    st.markdown("**Threads**")
+    if not threads:
+        st.caption("Chưa có Threads policy. Tạo một policy ở tab Accounts trước.")
+        return
+    selected_account = st.selectbox(
+        "Threads account",
+        options=[account_id for account_id, _ in threads],
+        key="threads_connection_account",
+    )
+    policy = next(policy for account_id, policy in threads if account_id == selected_account)
+    credential_ref = str(policy.publishing.credential_ref)
+    runtime = _runtime_env(
+        {
+            str(item_policy.publishing.credential_ref): _configured_secret(
+                str(item_policy.publishing.credential_ref)
+            )
+            for _, item_policy in threads
+            if item_policy.publishing.credential_ref
+        }
+    )
+    status = None
+    try:
+        token_store = EncryptedTokenStore.from_env(runtime, base_dir=ROOT)
+        manager = ThreadsTokenManager(env=runtime, store=token_store)
+        status = manager.status(credential_ref)
+        if status.configured:
+            st.success(
+                f"Threads token configured from `{status.source}`"
+                + (
+                    f" · expires `{status.expires_at:%Y-%m-%d}`"
+                    if status.expires_at
+                    else " · expiry unknown"
+                )
+            )
+        else:
+            st.warning("Threads chưa kết nối.")
+        if not status.persistent_rotation:
+            st.caption(
+                "Auto-refresh qua network đã sẵn sàng, nhưng muốn lưu token mới qua restart "
+                "hãy cấu hình `CONTENT_AGENT_TOKEN_ENCRYPTION_KEY`."
+            )
+    except MetaAuthError as exc:
+        token_store = None
+        manager = None
+        st.error(f"Threads token store: {exc}")
+
+    manual_token = st.text_input(
+        f"{credential_ref} (session only)",
+        type="password",
+        key=f"runtime_secret_{credential_ref}",
+        placeholder=(
+            "Không bắt buộc · đang dùng token hệ thống"
+            if _configured_secret(credential_ref)
+            else "Dán Threads long-lived token"
+        ),
+    )
+    token_days = st.number_input(
+        "Token còn hiệu lực khoảng bao nhiêu ngày?",
+        min_value=1,
+        max_value=60,
+        value=60,
+        key=f"threads_token_days_{credential_ref}",
+        help="Dùng expires_in Meta trả về nếu bạn biết giá trị chính xác.",
+    )
+    if st.button(
+        "Lưu/kích hoạt Threads token",
+        width="stretch",
+        disabled=not bool(manual_token.strip()),
+        key=f"save_threads_token_{credential_ref}",
+    ):
+        try:
+            refreshed_runtime = _runtime_env()
+            active_store = EncryptedTokenStore.from_env(refreshed_runtime, base_dir=ROOT)
+            active_manager = ThreadsTokenManager(env=refreshed_runtime, store=active_store)
+            record = active_manager.save_long_lived_token(
+                credential_ref,
+                access_token=manual_token,
+                expires_in=int(token_days) * 24 * 60 * 60,
+                user_id=str(policy.publishing.target_id),
+            )
+            st.session_state[f"runtime_secret_{credential_ref}"] = record.access_token
+            st.session_state[f"runtime_expiry_{credential_ref}"] = record.expires_at.isoformat()
+            _set_notice(
+                "success",
+                (
+                    "Threads token đã được mã hóa và lưu lâu dài."
+                    if active_store
+                    else "Threads token đang hoạt động trong browser session này."
+                ),
+            )
+            st.rerun()
+        except MetaAuthError as exc:
+            st.error(str(exc))
+
+    if manager and status and status.configured and status.expires_at:
+        if st.button(
+            "Refresh Threads token ngay",
+            width="stretch",
+            key=f"refresh_threads_token_{credential_ref}",
+        ):
+            try:
+                record = manager.refresh(credential_ref)
+                st.session_state[f"runtime_secret_{credential_ref}"] = record.access_token
+                st.session_state[f"runtime_expiry_{credential_ref}"] = record.expires_at.isoformat()
+                _set_notice(
+                    "success",
+                    f"Threads token refreshed; hạn mới `{record.expires_at:%Y-%m-%d}`.",
+                )
+                st.rerun()
+            except MetaAuthError as exc:
+                st.error(str(exc))
+
+    with st.expander(
+        "OAuth setup · lấy Threads token",
+        expanded=not bool(status and status.configured),
+    ):
+        st.caption(
+            "Tạo Meta App có Threads use case, cấu hình redirect URI, rồi dùng nút đăng nhập. "
+            "App Secret chỉ dùng phía server trong phiên này hoặc từ system secrets."
+        )
+        app_id = st.text_input(
+            "Threads App ID",
+            value=_configured_secret("THREADS_APP_ID"),
+            key="threads_oauth_app_id",
+        )
+        app_secret_override = st.text_input(
+            "Threads App Secret",
+            type="password",
+            key="runtime_secret_THREADS_APP_SECRET",
+            placeholder=(
+                "Đang dùng system secret"
+                if _configured_secret("THREADS_APP_SECRET")
+                else "Dán App Secret"
+            ),
+        )
+        redirect_uri = st.text_input(
+            "OAuth Redirect URI",
+            value=_configured_secret("THREADS_REDIRECT_URI") or "http://localhost:8501",
+            key="threads_oauth_redirect_uri",
+        )
+        state_key = f"threads_oauth_state_{credential_ref}"
+        if state_key not in st.session_state:
+            st.session_state[state_key] = token_urlsafe(24)
+        try:
+            authorization_url = build_threads_authorization_url(
+                app_id=app_id,
+                redirect_uri=redirect_uri,
+                state=st.session_state[state_key],
+                include_keyword_search=bool(policy.publishing.trend_search),
+            )
+        except MetaAuthError:
+            authorization_url = "https://developers.facebook.com/apps/"
+        st.link_button(
+            "1 · Đăng nhập và cấp quyền Threads",
+            authorization_url,
+            width="stretch",
+            disabled=not bool(app_id.strip() and redirect_uri.strip()),
+        )
+        callback_code = str(st.query_params.get("code", "") or "")
+        callback_state = str(st.query_params.get("state", "") or "")
+        authorization_code = st.text_input(
+            "2 · Authorization code",
+            value=callback_code,
+            key="threads_oauth_code",
+            help="App tự đọc query `code` sau redirect; bạn cũng có thể paste code thủ công.",
+        )
+        if st.button(
+            "3 · Exchange code và kết nối",
+            type="primary",
+            width="stretch",
+            disabled=not bool(authorization_code.strip()),
+            key=f"exchange_threads_code_{credential_ref}",
+        ):
+            try:
+                if callback_state and callback_state != st.session_state[state_key]:
+                    raise MetaAuthError(
+                        "threads_oauth_state",
+                        "OAuth state does not match this browser session. Start the login flow again.",
+                    )
+                app_secret = app_secret_override or _configured_secret("THREADS_APP_SECRET")
+                long_token, user_id, expires_in = ThreadsOAuthClient().exchange_code(
+                    code=authorization_code,
+                    app_id=app_id,
+                    app_secret=app_secret,
+                    redirect_uri=redirect_uri,
+                )
+                oauth_runtime = _runtime_env()
+                active_store = EncryptedTokenStore.from_env(oauth_runtime, base_dir=ROOT)
+                record = ThreadsTokenManager(
+                    env=oauth_runtime,
+                    store=active_store,
+                ).save_long_lived_token(
+                    credential_ref,
+                    access_token=long_token,
+                    expires_in=expires_in,
+                    user_id=user_id,
+                )
+                st.session_state[f"runtime_secret_{credential_ref}"] = record.access_token
+                st.session_state[f"runtime_expiry_{credential_ref}"] = record.expires_at.isoformat()
+                st.session_state[state_key] = token_urlsafe(24)
+                st.query_params.clear()
+                _set_notice(
+                    "success",
+                    f"Threads connected · User ID `{user_id}` · expires `{record.expires_at:%Y-%m-%d}`.",
+                )
+                st.rerun()
+            except MetaAuthError as exc:
+                st.error(f"Threads OAuth failed ({exc.code}): {exc}")
 
 
 def _invalidate_snapshot_download() -> None:
@@ -435,19 +710,21 @@ def _show_generation_result(store: SQLiteRunStore) -> None:
     except (KeyError, ValueError):
         st.session_state.pop("generation_result", None)
         return
+    origin = "AI generation" if request.mode == ContentMode.GENERATE else "Markdown import"
     st.success(
-        f"AI generation completed · state `{workflow['state']}` · "
+        f"{origin} completed · state `{workflow['state']}` · "
         f"score `{critic.score if critic else 'not scored'}`"
     )
     st.text_area(
-        "Generated post",
+        "Generated post" if request.mode == ContentMode.GENERATE else "Imported final post",
         value=render_post(draft),
         height=210,
         disabled=True,
         key=f"generated_post_{run_id}",
     )
     st.caption(
-        f"Topic: **{request.topic}** · Task: `{request.task.value}` · Source: `{request.source_type.value}`"
+        f"Topic: **{request.topic}** · Mode: `{request.mode.value}` · "
+        f"Task: `{request.task.value}` · Source: `{request.source_type.value}`"
     )
     with st.expander("View the exact input used for this post"):
         st.write(f"**Operator instructions:** {request.instructions or 'None'}")
@@ -568,6 +845,11 @@ usage = store.usage_summary()
 snapshot_bundle = _snapshot_download_bundle(store, database_path, runs)
 
 with st.sidebar:
+    with st.expander(
+        "🌐 Facebook & Threads",
+        expanded=False,
+    ):
+        _render_social_connections(catalog)
     st.divider()
     st.caption(f"Database · `{database_path.name}`")
     st.success(f"{len(runs)} runs · {len(queue)} waiting for review")
@@ -587,16 +869,16 @@ st.markdown(
     """
     <section class="hero">
       <h1>Social Content Agent Studio</h1>
-      <p>Chọn kênh, nhập chủ đề và mô tả bài bạn muốn. AI tự research, viết,
-      kiểm tra và đưa bài vào hàng duyệt — người tạo content không cần biết Markdown.</p>
+      <p>Chọn kênh và upload một content Markdown. AI có thể tự research, viết,
+      kiểm tra; hoặc nhập thẳng bài hoàn chỉnh vào luồng duyệt và publish.</p>
     </section>
     <div class="flow">
       <div class="flow-step"><b>Bước 1</b>Kết nối AI</div>
       <div class="flow-step"><b>Bước 2</b>Chọn kênh</div>
-      <div class="flow-step"><b>Bước 3</b>Nhập topic + mong muốn</div>
+      <div class="flow-step"><b>Bước 3</b>Upload content .md</div>
       <div class="flow-step"><b>Bước 4</b>AI viết & tự chấm</div>
       <div class="flow-step"><b>Bước 5</b>Người thật duyệt</div>
-      <div class="flow-step"><b>Bước 6</b>Dry-run rồi mới đăng</div>
+      <div class="flow-step"><b>Bước 6</b>Publish một click</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -628,187 +910,94 @@ create_tab, review_tab, publish_tab, accounts_tab, analytics_tab, help_tab = st.
 )
 
 with create_tab:
-    st.header("AI Content Composer")
+    st.header("Markdown Content Studio")
     st.markdown(
         """
         <div class="composer-intro">
-          <strong>Không cần biết Markdown.</strong>
-          Chỉ cần chọn kênh, nhập chủ đề và mô tả bài viết bạn muốn.
-          AI sẽ research, viết, tự kiểm tra và đưa bài vào hàng chờ duyệt.
+          <strong>Một file Markdown cho toàn bộ nội dung.</strong>
+          Chọn kênh, upload một file <code>.md</code>, kiểm tra preview rồi chạy.
+          <b>mode: generate</b> gọi AI; <b>mode: publish</b> nhập bài hoàn chỉnh
+          vào luồng duyệt mà không gọi AI.
         </div>
         """,
         unsafe_allow_html=True,
-    )
-    composer_mode = st.segmented_control(
-        "Bạn muốn bắt đầu từ đâu?",
-        options=("prompt", "source"),
-        default="prompt",
-        format_func=lambda value: {
-            "prompt": "✨ Tạo mới từ prompt",
-            "source": "📄 Biến nội dung có sẵn thành bài đăng",
-        }[value],
-        key="composer_mode",
-        width="stretch",
     )
     left, right = st.columns([1.7, 1], gap="large")
     with left:
         if not catalog:
             st.error(
-                "Chưa có kênh/phong cách hợp lệ. Hãy tạo bằng form tại "
-                "**4 · Accounts & policies**; không cần tự viết Markdown."
+                "Chưa có kênh/phong cách hợp lệ. Hãy cấu hình tại "
+                "**4 · Accounts & policies** trước khi upload content."
             )
         else:
-            with st.form("generation_form"):
-                selected_account = st.selectbox(
-                    "Kênh & phong cách",
-                    options=list(catalog),
-                    format_func=lambda account_id: (
-                        f"{catalog[account_id][1].platform} · {account_id} · {catalog[account_id][1].tone}"
-                    ),
-                    help=(
-                        "Chọn preset có sẵn. Audience, giọng văn, quy tắc và model "
-                        "đã được hệ thống cấu hình phía sau."
-                    ),
-                )
-                topic = st.text_input(
-                    "Chủ đề / Topic *",
-                    placeholder="Ví dụ: Ba cách học Python hiệu quả cho người mới",
-                    help="Một câu ngắn mô tả chủ đề chính của bài.",
-                )
+            selected_account = st.selectbox(
+                "Kênh & phong cách",
+                options=list(catalog),
+                format_func=lambda account_id: (
+                    f"{catalog[account_id][1].platform} · {account_id} · "
+                    f"{catalog[account_id][1].tone}"
+                ),
+                help=(
+                    "Account policy vẫn tách riêng để người dùng không bao giờ đặt token "
+                    "hoặc mật khẩu trong content Markdown."
+                ),
+            )
+            content_upload = st.file_uploader(
+                "Upload content Markdown *",
+                type=("md", "markdown"),
+                accept_multiple_files=False,
+                key="content_markdown_upload",
+                help="Một file UTF-8, tối đa 100 KB. Không upload token, API key hoặc cookie.",
+            )
+            parsed_document = None
+            if content_upload is not None:
+                try:
+                    parsed_document = parse_content_markdown(
+                        content_upload.getvalue(),
+                        source_name=content_upload.name,
+                    )
+                    st.success(
+                        f"Markdown hợp lệ · `{parsed_document.mode.value}` · "
+                        f"`{parsed_document.task.value}` · pipeline `{parsed_document.pipeline}`"
+                    )
+                    summary_columns = st.columns(3)
+                    summary_columns[0].metric("Mode", parsed_document.mode.value)
+                    summary_columns[1].metric("Task", parsed_document.task.value)
+                    summary_columns[2].metric("Blocks", len(parsed_document.block_types))
+                    st.write(f"**Topic:** {parsed_document.topic}")
+                    preview = (
+                        parsed_document.final_content
+                        if parsed_document.mode == ContentMode.PUBLISH
+                        else parsed_document.source_content or parsed_document.instructions
+                    )
+                    st.text_area(
+                        "Nội dung đã parse",
+                        value=preview,
+                        height=220,
+                        disabled=True,
+                        key="parsed_markdown_preview",
+                    )
+                    with st.expander("Chi tiết cấu trúc Markdown"):
+                        st.json(dict(metadata_summary(parsed_document)))
+                        if "image" in parsed_document.block_types:
+                            st.warning(
+                                "Image Markdown được giữ trong cấu trúc nhưng adapter text hiện tại "
+                                "chưa upload binary image lên Meta."
+                            )
+                except ContentMarkdownError as exc:
+                    st.error(f"Markdown không hợp lệ: {exc}")
 
-                source_content = ""
-                source_upload = None
-                if composer_mode == "prompt":
-                    objective = st.selectbox(
-                        "Mục tiêu bài viết",
-                        options=("educate", "engage", "announce", "promote", "story"),
-                        format_func=lambda value: {
-                            "educate": "Chia sẻ kiến thức / hướng dẫn",
-                            "engage": "Tăng tương tác / mở thảo luận",
-                            "announce": "Thông báo / cập nhật",
-                            "promote": "Giới thiệu sản phẩm hoặc dịch vụ",
-                            "story": "Kể chuyện / case study",
-                        }[value],
-                    )
-                    desired_content = st.text_area(
-                        "Bạn muốn AI viết bài như thế nào? *",
-                        placeholder=(
-                            "Ví dụ: Viết thành checklist 3 bước, dễ hiểu cho người mới, "
-                            "có ví dụ thực tế và kết thúc bằng một câu hỏi."
-                        ),
-                        height=120,
-                        help=(
-                            "Mô tả góc tiếp cận, ý chính, độ dài, CTA hoặc kết quả "
-                            "bạn mong muốn bằng ngôn ngữ tự nhiên."
-                        ),
-                    )
-                    must_include = st.text_area(
-                        "Thông tin bắt buộc phải có (không bắt buộc)",
-                        placeholder=(
-                            "Tên sản phẩm, lợi ích, số liệu đã kiểm chứng, link hoặc CTA cần nhắc đến."
-                        ),
-                        height=75,
-                    )
-                    objective_text = {
-                        "educate": "Goal: educate with useful, practical guidance.",
-                        "engage": "Goal: encourage a relevant, thoughtful discussion.",
-                        "announce": "Goal: communicate an announcement clearly.",
-                        "promote": "Goal: introduce an offer without hype or unsupported claims.",
-                        "story": "Goal: tell a concise story with a clear takeaway.",
-                    }[objective]
-                    instructions = "\n".join(
-                        part
-                        for part in (
-                            objective_text,
-                            desired_content.strip(),
-                            f"Must include: {must_include.strip()}" if must_include.strip() else "",
-                        )
-                        if part
-                    )
-                    content_task = ContentTask.CREATE.value
-                else:
-                    content_task = st.selectbox(
-                        "Bạn muốn xử lý nội dung gốc thế nào?",
-                        options=("repurpose", "rewrite", "summarize"),
-                        format_func=lambda value: {
-                            "repurpose": "Chuyển thể cho đúng kênh và audience",
-                            "rewrite": "Viết lại hay hơn nhưng giữ nguyên ý",
-                            "summarize": "Tóm tắt thành bài social ngắn gọn",
-                        }[value],
-                    )
-                    instructions = st.text_area(
-                        "Bạn muốn AI biến đổi nội dung như thế nào?",
-                        placeholder=(
-                            "Ví dụ: Chuyển thành checklist 3 bước, giữ nguyên các dữ kiện "
-                            "và kết thúc bằng một câu hỏi cho team lead."
-                        ),
-                        height=95,
-                    )
-                    source_content = st.text_area(
-                        "Dán nội dung gốc",
-                        placeholder=(
-                            "Dán bài viết, ghi chú chiến dịch, thông báo sản phẩm, "
-                            "transcript hoặc post cũ cần chuyển thể."
-                        ),
-                        height=160,
-                        max_chars=30_000,
-                        help=(
-                            "Nội dung được lưu cùng run để đối chiếu. Có thể dùng ô này "
-                            "hoặc upload một file UTF-8 bên dưới, không dùng đồng thời cả hai."
-                        ),
-                    )
-                    source_upload = st.file_uploader(
-                        "Hoặc upload nội dung gốc (.md/.txt)",
-                        type=("md", "txt"),
-                        accept_multiple_files=False,
-                        help="Tối đa 30.000 ký tự. Người dùng không cần tự tạo account Markdown.",
-                    )
-
-                with st.expander("⚙️ Tùy chọn nâng cao", expanded=False):
-                    generation_mode = st.selectbox(
-                        "Pipeline",
-                        options=("full", "draft"),
-                        format_func=lambda value: (
-                            "Full · research + write + critic + rewrite/review"
-                            if value == "full"
-                            else "Draft only · research + write"
-                        ),
-                        help="Khuyên dùng Full để có chấm điểm, rewrite và human review.",
-                    )
-                    selected_policy = catalog[selected_account][1]
-                    st.caption(
-                        f"Platform: {selected_policy.platform} · "
-                        f"Ngôn ngữ: {selected_policy.language} · "
-                        f"Ngưỡng duyệt: {selected_policy.threshold}"
-                    )
-                generate = st.form_submit_button(
-                    "✨ Tạo bài bằng AI",
-                    type="primary",
-                    width="stretch",
-                )
-                if generate:
-                    try:
-                        if not topic.strip():
-                            raise ValueError("Hãy nhập chủ đề trước khi tạo bài.")
-                        if composer_mode == "prompt" and not desired_content.strip():
-                            raise ValueError("Hãy mô tả bài viết bạn muốn AI tạo.")
-                        uploaded_text = ""
-                        uploaded_name = None
-                        if source_upload is not None:
-                            if source_content.strip():
-                                raise ValueError("Chỉ dùng một nguồn: xóa phần đã dán hoặc gỡ file upload.")
-                            try:
-                                uploaded_text = source_upload.getvalue().decode("utf-8-sig")
-                            except UnicodeDecodeError as exc:
-                                raise ValueError("File nội dung phải là Markdown/text mã hóa UTF-8.") from exc
-                            uploaded_name = source_upload.name
-                        request = ContentRequest.from_inputs(
-                            topic=topic,
-                            instructions=instructions,
-                            source_content=uploaded_text or source_content,
-                            source_name=uploaded_name,
-                            task=content_task,
-                        )
+            process_markdown = st.button(
+                "Chạy content Markdown",
+                type="primary",
+                width="stretch",
+                disabled=parsed_document is None,
+                help="Generate sẽ gọi AI; Publish sẽ nhập bài hoàn chỉnh vào review queue.",
+            )
+            if process_markdown and parsed_document is not None:
+                try:
+                    policy_path = catalog[selected_account][0]
+                    if parsed_document.mode == ContentMode.GENERATE:
                         missing = _missing_provider_credentials()
                         if missing:
                             raise ValueError(
@@ -816,80 +1005,101 @@ with create_tab:
                                 + ", ".join(missing)
                                 + ". Dán key tạm trong Kết nối AI hoặc cấu hình key hệ thống."
                             )
-                        policy_path = catalog[selected_account][0]
                         runtime = _runtime_env()
 
                         def provider_factory(role, **kwargs):
                             return create_role_provider(role, env=runtime, **kwargs)
 
-                        publisher = PolicyPublisherRouter(store, mode="dry-run", env=runtime)
-                        with st.spinner("Researching, writing, checking policy, and scoring the post…"):
+                        with st.spinner("AI đang research, viết, kiểm tra policy và chấm điểm…"):
                             result = PipelineOrchestrator(
                                 store,
                                 provider_factory=provider_factory,
-                                publisher=publisher,
+                                publisher=PolicyPublisherRouter(
+                                    store,
+                                    mode="dry-run",
+                                    env=runtime,
+                                ),
                             ).run(
-                                request=request,
+                                request=parsed_document.to_content_request(),
                                 policy_path=policy_path,
-                                mode=PipelineMode(generation_mode),
+                                mode=PipelineMode(parsed_document.pipeline),
                             )
-                        st.session_state["generation_result"] = {"run_id": str(result.run_id)}
-                        _set_notice(
-                            "success",
-                            f"Đã tạo content cho {result.policy.account_id}; "
-                            f"trạng thái là {result.workflow_state.value}.",
+                        run_id = result.run_id
+                        state = result.workflow_state.value
+                        message = (
+                            f"AI đã tạo content cho {result.policy.account_id}; "
+                            f"trạng thái `{state}`."
                         )
-                        st.rerun()
-                    except PipelineRunError as exc:
-                        if exc.code == "network":
-                            st.error(
-                                f"Research could not reach the AI provider after three retries. "
-                                f"Run `{exc.run_id}` was saved. Open **Kết nối AI → "
-                                f"Kiểm tra 3 kết nối**. If every provider reports `network`, "
-                                f"restart the app with outbound internet access or check the proxy/firewall."
+                    else:
+                        with st.spinner("Đang kiểm tra policy và tạo bản nháp có audit…"):
+                            imported = import_publish_document(
+                                store,
+                                policy_path=policy_path,
+                                document=parsed_document,
                             )
-                        elif exc.code in {"authentication", "permission_denied"}:
-                            st.error(
-                                f"The provider rejected its credential or permission. Run "
-                                f"`{exc.run_id}` was saved. Paste a manual key in **Kết nối AI** "
-                                f"or fix the system default, then test connections."
-                            )
-                        else:
-                            st.error(
-                                f"Generation failed at `{exc.step.value}` ({exc.code}). "
-                                f"Run `{exc.run_id}` is saved for investigation: {exc}"
-                            )
-                    except (PolicyParseError, ValueError, RuntimeError) as exc:
-                        st.error(str(exc))
+                        run_id = imported.run_id
+                        state = imported.workflow_state.value
+                        message = (
+                            f"Đã nhập bài hoàn chỉnh cho {imported.policy.account_id}; "
+                            f"trạng thái `{state}`."
+                        )
+                        if not imported.hard_rule_passed:
+                            message += " Bài có hard-rule violation và bắt buộc phải sửa trong Review."
+                    st.session_state["generation_result"] = {"run_id": str(run_id)}
+                    _set_notice("success", message)
+                    _invalidate_snapshot_download()
+                    st.rerun()
+                except PipelineRunError as exc:
+                    if exc.code == "network":
+                        st.error(
+                            f"Không kết nối được AI provider sau ba lần thử. Run `{exc.run_id}` "
+                            "đã được lưu. Mở **Kết nối AI → Kiểm tra 3 kết nối** và kiểm tra "
+                            "internet/proxy/firewall."
+                        )
+                    elif exc.code in {"authentication", "permission_denied"}:
+                        st.error(
+                            f"Provider từ chối credential hoặc permission. Run `{exc.run_id}` "
+                            "đã được lưu. Hãy cập nhật key rồi kiểm tra kết nối."
+                        )
+                    else:
+                        st.error(
+                            f"Generation failed at `{exc.step.value}` ({exc.code}). "
+                            f"Run `{exc.run_id}` is saved for investigation: {exc}"
+                        )
+                except (ContentMarkdownError, PolicyParseError, ValueError, RuntimeError) as exc:
+                    st.error(str(exc))
     with right:
-        if composer_mode == "prompt":
-            st.markdown(
-                """
-                <div class="hint-card">
-                  <strong>Bạn chỉ cần nhập 2 thứ</strong><br>
-                  <b>Chủ đề</b> là bài nói về gì. <b>Mô tả bài viết</b> cho AI biết
-                  góc viết, cấu trúc, ý chính và CTA bạn muốn.
-                </div>
-                <div class="hint-card">
-                  <strong>Markdown nằm ở đâu?</strong><br>
-                  Markdown chỉ là cấu hình nâng cao cho admin. Người tạo content
-                  bình thường không cần mở, tạo hay upload file Markdown.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                """
-                <div class="hint-card">
-                  <strong>Dùng nội dung có sẵn</strong><br>
-                  Dán bài cũ, transcript hoặc ghi chú rồi chọn chuyển thể, viết lại
-                  hoặc tóm tắt. AI vẫn giữ source để người duyệt đối chiếu.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        st.markdown("**AI sẽ tự chạy các bước**")
+        st.markdown(
+            """
+            <div class="hint-card">
+              <strong>1 · Chọn đúng template</strong><br>
+              Dùng <code>generate</code> khi muốn AI viết từ topic/brief/source.
+              Dùng <code>publish</code> khi file đã chứa bài hoàn chỉnh.
+            </div>
+            <div class="hint-card">
+              <strong>2 · Không đặt secret trong file</strong><br>
+              Markdown chỉ chứa nội dung. Facebook/Threads token luôn nằm trong
+              system settings hoặc ô password của phiên hiện tại.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        template_columns = st.columns(2)
+        template_columns[0].download_button(
+            "Tải template Generate",
+            data=GENERATE_TEMPLATE,
+            file_name="content-generate.md",
+            mime="text/markdown",
+            width="stretch",
+        )
+        template_columns[1].download_button(
+            "Tải template Publish",
+            data=PUBLISH_TEMPLATE,
+            file_name="content-publish.md",
+            mime="text/markdown",
+            width="stretch",
+        )
+        st.markdown("**Khi mode là Generate**")
         for role in (Role.RESEARCH, Role.COPYWRITER, Role.CRITIC):
             route = DEFAULT_ROUTES[role]
             source = _credential_source(route.credential_env)
@@ -898,7 +1108,10 @@ with create_tab:
             st.write(
                 f"{ready} **{role.value.title()}** · {route.provider} · `{selected_model}` · key: `{source}`"
             )
-        st.caption("Hãy dùng **Kết nối AI → Kiểm tra 3 kết nối** trước lần generate đầu tiên.")
+        st.caption(
+            "Mode Publish không tiêu tốn AI token. Cả hai mode vẫn đi qua policy, "
+            "review, permission và idempotent publisher."
+        )
     _show_generation_result(store)
 
 with review_tab:
@@ -1098,10 +1311,10 @@ with review_tab:
             st.dataframe(store.get_events(selected_run), width="stretch", hide_index=True)
 
 with publish_tab:
-    st.header("Dry-run and publish")
+    st.header("Publish")
     st.caption(
         "No file upload is needed here. The publisher sends the approved draft already stored "
-        "in SQLite. Always dry-run before live delivery."
+        "in SQLite. Dry-run is recommended but optional; Publish sends immediately."
     )
     _publish_result_panel()
     eligible = [run for run in runs if run.get("workflow_state") in {"passed", "approved", "dry_run"}]
@@ -1139,7 +1352,7 @@ with publish_tab:
         )
         dry_column, live_column = st.columns(2, gap="large")
         with dry_column:
-            st.subheader("1. Validate safely")
+            st.subheader("Optional safety check")
             st.caption("Dry-run does not resolve the Meta token and does not call Meta.")
             if st.button(
                 "Run publishing dry-run",
@@ -1159,8 +1372,8 @@ with publish_tab:
                 except (PublishError, ValueError, KeyError) as exc:
                     st.error(f"Dry-run failed: {exc}")
         with live_column:
-            st.subheader("2. Publish live")
-            st.warning("This can create a real external post. Use only after a successful dry-run.")
+            st.subheader("Publish immediately")
+            st.warning("Clicking Publish can create a real external post immediately.")
             credential_ref = publish_policy.publishing.credential_ref
             session_token = ""
             if credential_ref:
@@ -1174,14 +1387,6 @@ with publish_tab:
                         else "Paste current Meta token"
                     ),
                 )
-            confirm = st.checkbox(
-                "I checked the final content, destination, and dry-run receipt.",
-                key=f"publish_confirm_{publish_run}",
-            )
-            phrase = st.text_input(
-                "Type PUBLISH to unlock live delivery",
-                key=f"publish_phrase_{publish_run}",
-            )
             placeholder_target = str(publish_policy.publishing.target_id or "").startswith("000")
             if placeholder_target:
                 st.warning("Live publishing is locked because this policy still has a placeholder target ID.")
@@ -1189,7 +1394,7 @@ with publish_tab:
                 "Publish live now",
                 type="primary",
                 width="stretch",
-                disabled=not confirm or phrase.strip() != "PUBLISH" or placeholder_target,
+                disabled=placeholder_target,
                 key="publish_live",
             ):
                 try:
@@ -1201,6 +1406,11 @@ with publish_tab:
                         receipt = PolicyPublisherRouter(
                             store,
                             mode="live",
+                            credential_resolver=(
+                                EnvironmentCredentialResolver(extra)
+                                if session_token and credential_ref
+                                else None
+                            ),
                             env=_runtime_env(extra),
                         ).publish(publish_run)
                     st.session_state["publish_result"] = receipt.model_dump(mode="json")
@@ -1551,7 +1761,6 @@ with analytics_tab:
                 ),
                 key="history_run",
             )
-            history_draft = store.get_current_draft(history_run)
             history_request = store.get_content_request(history_run)
             st.caption(
                 f"Task `{history_request.task.value}` · source "
@@ -1570,12 +1779,22 @@ with analytics_tab:
                     )
                 else:
                     st.write("No source content was supplied.")
-            st.text_area(
-                "Persisted post",
-                value=render_post(history_draft),
-                height=180,
-                disabled=True,
-            )
+            try:
+                history_draft = store.get_current_draft(history_run)
+            except KeyError:
+                history_draft = None
+            if history_draft is None:
+                st.warning(
+                    "This run failed before a valid draft was created. Inspect Events "
+                    "for the safe error code and retry guidance."
+                )
+            else:
+                st.text_area(
+                    "Persisted post",
+                    value=render_post(history_draft),
+                    height=180,
+                    disabled=True,
+                )
             detail_tabs = st.tabs(["Events", "Revisions", "Critics", "Reviews", "Publishing", "Artifacts"])
             detail_tabs[0].dataframe(
                 store.get_events(history_run),
@@ -1651,17 +1870,18 @@ with help_tab:
         1. Open **Kết nối AI** in the sidebar. Leave the password fields blank
            to use `.env`/Streamlit Secrets, or paste a session-only override.
            Click **Kiểm tra 3 kết nối** before generating.
-        2. Open **1 · Create content** and keep **Tạo mới từ prompt**. Choose a
-           channel, enter the topic and describe the post you want in natural
-           language. No Markdown is required.
-        3. To transform existing material, switch to **Biến nội dung có sẵn**,
-           then paste text or upload one UTF-8 `.md`/`.txt` source file.
+        2. Open **1 · Create content**, download a Generate or Publish template,
+           and put the complete request/post in that one UTF-8 Markdown file.
+        3. Choose a channel, upload the `.md`, verify the parsed preview, and
+           click **Chạy content Markdown**.
         4. Research → Copywriter → rule Critic → LLM Critic run automatically.
-           Failed drafts are rewritten no more than twice.
+           Failed AI drafts are rewritten no more than twice. `mode: publish`
+           imports a manual draft without calling AI.
         5. Open **2 · Review & approve** to inspect score, violations, suggestions,
            edit the post, and approve it with an audit note.
-        6. Open **3 · Publish**, run dry-run, verify the receipt and destination,
-           then explicitly unlock live delivery if the platform token and ID are real.
+        6. Open **3 · Publish**. Dry-run is optional. If the platform token and
+           target ID are real, **Publish live now** sends immediately without a
+           typed confirmation phrase.
         7. A new channel can be created in **4 · Accounts & policies → Tạo kênh
            bằng form**. Markdown import/editing is an advanced admin option only.
 
@@ -1669,9 +1889,7 @@ with help_tab:
 
         | Place | Upload/input | Purpose |
         |---|---|---|
-        | Quick Composer → Topic | Subject/campaign topic | Tells Research Agent what to investigate |
-        | Quick Composer → Desired post | Angle, structure, CTA, desired outcome | Natural-language prompt |
-        | Existing content mode | UTF-8 `.md`/`.txt` or pasted text | Material to transform |
+        | Create content | One UTF-8 `.md`/`.markdown` | Topic + brief + source, or final post |
         | Accounts → Guided form | Normal form fields | Add/change a channel without Markdown |
         | Accounts → Markdown | `.md` account policy | Advanced admin import |
         | Analytics → Data transfer | Non-empty SQLite snapshot | Move run evidence from Actions |
@@ -1682,11 +1900,15 @@ with help_tab:
 
         - Start with `mock` publishing while learning.
         - Facebook live publishing targets a managed **Page**, not a personal/clone login.
-        - Never place API keys, passwords, cookies, or tokens in account Markdown.
+        - Never place API keys, passwords, cookies, or tokens in any Markdown.
         - Source content is stored with the run for review lineage and is treated
           as untrusted data, not as hidden agent instructions.
         - `approval_required: true` keeps every passing draft in the human queue.
         - Dry-run cannot create an external Meta post.
+        - Live Publish is one click, but backend workflow/permission/credential/
+          target/idempotency guards remain mandatory.
+        - Threads tokens can refresh silently before expiry when encrypted token
+          storage is configured; an already-expired token requires OAuth reconnect.
         - The operational store is one canonical SQLite database. Each download
           gets a random unique filename; at most 20 local snapshots are retained.
         """

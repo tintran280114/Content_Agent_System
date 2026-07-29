@@ -8,7 +8,7 @@ import content_agent
 
 class PackageTests(unittest.TestCase):
     def test_package_exposes_mvp_version(self) -> None:
-        self.assertEqual(content_agent.__version__, "0.7.0")
+        self.assertEqual(content_agent.__version__, "0.8.0")
 
 
 if __name__ == "__main__":

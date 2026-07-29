@@ -2,13 +2,13 @@
 
 Policy-driven social-content pipeline with a guided Streamlit studio, CLI batch
 automation, and embedded SQLite evidence. A non-technical operator can create
-an account policy, enter a topic and writing brief, optionally supply source
-content, generate a post with three AI providers,
-review/approve it, dry-run delivery, and explicitly publish from one UI. The
-same canonical orchestrator powers the UI, CLI, and scheduled batch.
+an account policy, upload one content Markdown file, generate a post with three
+AI providers or import a publish-ready post, review/approve it, and publish from
+one UI. The same canonical orchestrator powers AI generation in the UI, CLI,
+and scheduled batch.
 
 ```text
-Markdown AccountPolicy + ContentRequest(topic, instructions, source content)
+Markdown AccountPolicy + Content Markdown -> ContentRequest
   -> Gemini Research
   -> Groq Copywriter
   -> local Rule Critic
@@ -27,13 +27,14 @@ Markdown AccountPolicy + ContentRequest(topic, instructions, source content)
 - Bounded retry/backoff and application-side daily request/token quotas.
 - Mock, Facebook Page, and Threads publishers with dry-run and explicit live gates.
 - Threads topic tags with optional recent-activity selection from up to five niche candidates.
-- Environment-only credentials, publish reservations, retry/backoff, and remote post IDs.
+- Encrypted Threads token storage, OAuth exchange, proactive refresh, publish
+  reservations, retry/backoff, and remote post IDs.
 - Session-only manual AI-key overrides with system-default fallback and safe connection probes.
 - SQLite runs, events, revisions, scores, review audit, usage, and publish receipts.
 - Collision-safe SQLite download names with a bounded 20-snapshot local rotation.
 - CLI `--account`, `--all`, draft compatibility, cron/Actions scheduling.
-- Separate topic, operator instructions, and pasted/uploaded source-content contracts.
-- Streamlit content-request generation, guided `.md` policy builder, queue,
+- One-file content Markdown contract with `generate` and `publish` modes.
+- Streamlit Markdown generation/import, guided `.md` policy builder, queue,
   approve/reject/edit, guarded publish, history, score, token, cost, and retry views.
 - Resumable 10-topic x 3-policy evaluation with raw-output comparisons.
 
@@ -183,17 +184,15 @@ streamlit run streamlit_app.py
 Open `http://localhost:8501`. The six numbered tabs guide the complete flow:
 
 1. connect provider keys in `.env` or session-only password fields;
-2. use the default Quick Composer: choose a channel, enter a topic, and
-   describe the desired post in natural language;
-3. optionally switch to existing-content mode to repurpose, rewrite, or
-   summarize pasted/uploaded source content;
+2. choose a channel and upload one UTF-8 content `.md`;
+3. use `mode: generate` for AI creation or `mode: publish` for a finished post;
 4. inspect/edit/approve the scored post;
 5. run guarded dry-run and optional live delivery;
 6. inspect all evidence, tokens, retries, and help.
 
 It provides:
 
-- prompt-first AI content generation for users who do not know Markdown;
+- strict one-file Markdown parsing with downloadable generate/publish templates;
 - content-request-to-post Research, Copywriter, Critic, and bounded rewrite execution;
 - four content tasks: create, repurpose, rewrite, and summarize;
 - frozen source-content lineage visible during generation, review, and publish;
@@ -203,7 +202,10 @@ It provides:
 - approve-to-queue, reject, and immutable edit actions with operator audit;
 - a persistent latest-action result showing success/failure, new state, Run ID,
   Draft ID, operator, and guarded publish commands after approval;
-- dry-run and live publisher controls with confirmation and placeholder-ID guards;
+- optional dry-run plus one-click live publish with backend state, permission,
+  credential, placeholder-ID, and idempotency guards;
+- Threads OAuth code exchange, encrypted long-lived token persistence, and
+  automatic rotation before expiry;
 - run events, artifacts, revisions, and delivery decisions;
 - score history plus token/cost/request/retry metrics per run and provider;
 - one canonical SQLite operations store;
@@ -213,10 +215,9 @@ It provides:
 The Streamlit and CLI paths do not duplicate orchestration logic: both call the
 same `PipelineOrchestrator`.
 
-See [Content request contract](docs/content_request.md) for the exact difference
-between topic, writing instructions, source content, and account-policy Markdown.
-For a recording-ready walkthrough, use the
-[Vietnamese demo guide](docs/demo_guide_vi.md).
+See the [Vietnamese end-to-end user journey](docs/user_journey_vi.md) for the
+content templates, Facebook setup, one-click publish flow, and step-by-step
+Threads OAuth instructions.
 
 ## Scheduled GitHub Actions batch
 

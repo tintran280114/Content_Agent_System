@@ -32,8 +32,8 @@ without changing the account-policy contract.
 |---|---|---|
 | One orchestrator scans `accounts/*.md` | Complete | `PipelineOrchestrator`, CLI `--all`, policy discovery tests |
 | Policy chooses topic handoff, model route, and review | Complete | `AccountPolicy` v0.2 and frozen per-run policy payload |
-| Topic, operator brief, and source content remain distinct | Product extension complete | frozen `ContentRequest`, CLI/UI inputs, lineage and agent-prompt tests |
-| Prompt-first content creation without Markdown knowledge | Product extension complete | default Quick Composer, guided channel form, advanced-only Markdown UI, AppTest/live smoke |
+| Topic, operator brief, and source content remain distinct | Product extension complete | one content Markdown parser maps sections to frozen `ContentRequest`; lineage and agent-prompt tests |
+| One content Markdown is sufficient | Product extension complete | `generate` and `publish` templates, CommonMark token parsing, direct-import audit, AppTest |
 | Manual AI key override with system fallback | Product extension complete | session-only override, `.env`/Secrets fallback, source labels and UI tests |
 | Diagnose configured-but-unreachable AI | Product extension complete | non-generation endpoint/model probes and safe network/auth/permission states |
 | Collision-safe SQLite downloads | Product extension complete | one canonical DB plus randomized snapshot names and bounded 20-copy rotation |
@@ -43,7 +43,9 @@ without changing the account-policy contract.
 | Copywriter on a second provider | Complete | Groq structured `DraftPost` |
 | Hybrid Critic on a different provider | Complete | local `RuleCritic` + GitHub Models `CriticResult` |
 | Publisher is code-only and swappable | Complete | protocol + mock, Facebook Page, Threads adapters |
-| One Markdown file per account | Complete | strict parser, three examples, template, guided builder/import |
+| One Markdown file per account | Complete | strict account-policy parser, three examples, template, guided builder/import |
+| No typed `PUBLISH` confirmation | Complete | one-click UI; backend workflow, permission, credential, target and idempotency guards retained |
+| Threads OAuth and silent refresh | Complete | OAuth code/long-lived exchange, encrypted store, expiry-aware proactive rotation |
 | Goal, constraints, examples, rubric, threshold | Complete | required parser sections and Policy Studio form |
 | Add/change account without Python edits | Complete in code/tests | UI builder saves validated `accounts/<slug>.md`; acceptance test creates a new policy |
 | Hard rules cost zero tokens | Complete | deterministic rule step is logged without provider usage |
@@ -73,17 +75,17 @@ The assignment only explicitly requires queue/score/cost in the dashboard.
 The product now also provides:
 
 1. provider-key readiness and session-only overrides;
-2. separate topic, writing-brief, and pasted/uploaded source-content inputs;
-3. create, repurpose, rewrite, and summarize tasks through the canonical orchestrator;
+2. one content Markdown upload that maps topic, writing brief and source;
+3. `generate`/`publish` modes plus create, repurpose, rewrite, and summarize tasks;
 4. a non-technical account-policy builder and `.md` importer;
 5. generated-post preview/download with original-input lineage;
 6. audited edit/approve/reject actions;
-7. dry-run and confirmation-gated live publishing;
-8. in-app explanations of exactly what to type or upload in each place.
+7. optional dry-run and one-click live publishing with backend guards;
+8. Threads OAuth, encrypted token rotation and in-app setup guidance.
 
 ## Latest verification
 
-- 112/112 automated tests pass.
+- 126/126 automated tests pass after the Markdown/OAuth refactor.
 - Ruff lint and formatting checks pass.
 - Compileall and dependency consistency checks pass.
 - Version 0.7.0 source distribution and wheel build successfully.

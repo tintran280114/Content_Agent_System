@@ -152,6 +152,69 @@ class StorageTests(unittest.TestCase):
 
         self.assertIn("topic_tag", columns)
 
+    def test_v04_draft_revisions_add_markdown_import_without_data_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "v04.sqlite3"
+            connection = sqlite3.connect(database)
+            try:
+                connection.executescript(
+                    """
+                    CREATE TABLE runs (
+                        run_id TEXT PRIMARY KEY,
+                        account_id TEXT NOT NULL,
+                        topic TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        error_code TEXT,
+                        error_message TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO runs(
+                        run_id, account_id, topic, state, created_at, updated_at
+                    ) VALUES(
+                        'legacy-run', 'legacy-account', 'topic', 'completed',
+                        '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+                    );
+                    CREATE TABLE draft_revisions (
+                        draft_id TEXT PRIMARY KEY,
+                        run_id TEXT NOT NULL,
+                        parent_draft_id TEXT,
+                        revision INTEGER NOT NULL,
+                        origin TEXT NOT NULL CHECK (
+                            origin IN ('initial_ai', 'ai_rewrite', 'human_edit')
+                        ),
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(run_id, revision)
+                    );
+                    INSERT INTO draft_revisions(
+                        draft_id, run_id, revision, origin, payload_json, created_at
+                    ) VALUES(
+                        'legacy-draft', 'legacy-run', 0, 'initial_ai', '{}',
+                        '2026-01-01T00:00:00Z'
+                    );
+                    """
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            SQLiteRunStore(database)
+            connection = sqlite3.connect(database)
+            try:
+                table_sql = connection.execute(
+                    "SELECT sql FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'draft_revisions'"
+                ).fetchone()[0]
+                legacy = connection.execute(
+                    "SELECT draft_id, origin FROM draft_revisions"
+                ).fetchone()
+            finally:
+                connection.close()
+
+        self.assertIn("markdown_import", table_sql)
+        self.assertEqual(legacy, ("legacy-draft", "initial_ai"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,7 @@ from ..critics import RuleCriticResult
 from ..policy import AccountPolicy
 from .contracts import EventState, RunEvent, RunState, RunStep
 
-SCHEMA_VERSION = "0.4"
+SCHEMA_VERSION = "0.5"
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -96,7 +96,9 @@ CREATE TABLE IF NOT EXISTS draft_revisions (
     run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
     parent_draft_id TEXT,
     revision INTEGER NOT NULL CHECK (revision >= 0),
-    origin TEXT NOT NULL CHECK (origin IN ('initial_ai', 'ai_rewrite', 'human_edit')),
+    origin TEXT NOT NULL CHECK (
+        origin IN ('initial_ai', 'ai_rewrite', 'human_edit', 'markdown_import')
+    ),
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE(run_id, revision)
@@ -198,6 +200,7 @@ class SQLiteRunStore:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(SQLITE_SCHEMA)
             self._migrate_publish_attempts(connection)
+            self._migrate_draft_origins(connection)
             connection.execute(
                 "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -244,6 +247,41 @@ class SQLiteRunStore:
             DROP TABLE publish_attempts_legacy;
             CREATE INDEX IF NOT EXISTS idx_publish_attempts_run
                 ON publish_attempts(run_id, created_at);
+            """
+        )
+
+    @staticmethod
+    def _migrate_draft_origins(connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'draft_revisions'"
+        ).fetchone()
+        schema_sql = str(row["sql"] or "") if row else ""
+        if "markdown_import" in schema_sql:
+            return
+        connection.executescript(
+            """
+            ALTER TABLE draft_revisions RENAME TO draft_revisions_legacy;
+            CREATE TABLE draft_revisions (
+                draft_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+                parent_draft_id TEXT,
+                revision INTEGER NOT NULL CHECK (revision >= 0),
+                origin TEXT NOT NULL CHECK (
+                    origin IN ('initial_ai', 'ai_rewrite', 'human_edit', 'markdown_import')
+                ),
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(run_id, revision)
+            );
+            INSERT INTO draft_revisions(
+                draft_id, run_id, parent_draft_id, revision, origin, payload_json, created_at
+            )
+            SELECT
+                draft_id, run_id, parent_draft_id, revision, origin, payload_json, created_at
+            FROM draft_revisions_legacy;
+            DROP TABLE draft_revisions_legacy;
+            CREATE INDEX IF NOT EXISTS idx_draft_revisions_run
+                ON draft_revisions(run_id, revision);
             """
         )
 

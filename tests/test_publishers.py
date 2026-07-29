@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -312,6 +313,49 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(client.calls[0]["data"]["media_type"], "TEXT")
         self.assertTrue(client.calls[1]["url"].endswith("/987654321/threads_publish"))
         self.assertEqual(client.calls[1]["data"]["creation_id"], "container-1")
+
+    def test_threads_live_silently_refreshes_near_expiry(self) -> None:
+        run_id, _ = self.create_publishable_run(
+            adapter="threads",
+            credential_ref="THREADS_TEST_TOKEN",
+            target_id="987654321",
+        )
+        client = FakeClient(
+            [
+                FakeResponse(200, {"id": "container-refreshed"}),
+                FakeResponse(200, {"id": "thread-refreshed"}),
+            ],
+            get_responses=[
+                FakeResponse(
+                    200,
+                    {
+                        "access_token": "rotated-private-token",
+                        "expires_in": 5_184_000,
+                    },
+                )
+            ],
+        )
+        expiry = (datetime.now(UTC) + timedelta(days=2)).isoformat()
+
+        receipt = ThreadsPublisher(
+            self.store,
+            mode="live",
+            client=client,
+            env={
+                "THREADS_TEST_TOKEN": "old-private-token",
+                "THREADS_TEST_TOKEN_EXPIRES_AT": expiry,
+                "THREADS_GRAPH_API_VERSION": "v1.0",
+            },
+            sleeper=lambda _: None,
+        ).publish(run_id)
+
+        self.assertEqual(receipt.remote_post_id, "thread-refreshed")
+        self.assertEqual(len(client.get_calls), 1)
+        self.assertTrue(client.get_calls[0]["url"].endswith("/refresh_access_token"))
+        self.assertEqual(
+            client.calls[0]["headers"]["Authorization"],
+            "Bearer rotated-private-token",
+        )
 
     def test_threads_selects_most_active_configured_topic_tag(self) -> None:
         run_id, _ = self.create_publishable_run(

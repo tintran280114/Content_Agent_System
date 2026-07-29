@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "content-agent-system"
-version = "0.7.0"
+version = "0.8.0"
 description = "Policy-driven social content agent with a guided Streamlit studio."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -15,6 +15,8 @@ dependencies = [
     "groq>=1.5,<2",
     "openai>=2.46,<3",
     "httpx>=0.28,<1",
+    "markdown-it-py>=4,<5",
+    "cryptography>=45,<47",
     "streamlit==1.59.2",
 ]
 

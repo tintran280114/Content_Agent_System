@@ -36,6 +36,7 @@ class StreamlitAppTests(unittest.TestCase):
                 upload_labels = {uploader.label for uploader in app.file_uploader}
                 self.assertIn("Upload a non-empty SQLite snapshot", upload_labels)
                 self.assertIn("Upload account policy Markdown", upload_labels)
+                self.assertIn("Upload content Markdown *", upload_labels)
                 self.assertNotIn("Hoặc upload nội dung gốc (.md/.txt)", upload_labels)
                 labels = [tab.label for tab in app.tabs]
                 self.assertIn("1 · Create content", labels)
@@ -46,7 +47,7 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertIn("6 · Help & testing", labels)
                 self.assertTrue(any(button.label == "Kiểm tra 3 kết nối" for button in app.button))
                 self.assertTrue(any(button.label == "Xóa key nhập tay" for button in app.button))
-                self.assertTrue(
+                self.assertFalse(
                     any(control.label == "Bạn muốn bắt đầu từ đâu?" for control in app.segmented_control)
                 )
                 gemini_key = next(field for field in app.text_input if field.label == "Gemini · Research")
@@ -58,43 +59,20 @@ class StreamlitAppTests(unittest.TestCase):
                 app.run()
                 self.assertEqual(list(app.exception), [])
                 self.assertTrue(any("key mặc định của hệ thống" in info.value for info in app.info))
-                self.assertTrue(any(field.label == "Chủ đề / Topic *" for field in app.text_input))
-                self.assertTrue(
+                self.assertFalse(any(field.label == "Chủ đề / Topic *" for field in app.text_input))
+                self.assertFalse(
                     any(area.label == "Bạn muốn AI viết bài như thế nào? *" for area in app.text_area)
                 )
-                self.assertTrue(any(button.label == "✨ Tạo bài bằng AI" for button in app.button))
-                generate_button = next(
-                    button for button in app.button if button.label == "✨ Tạo bài bằng AI"
+                process_button = next(
+                    button for button in app.button if button.label == "Chạy content Markdown"
                 )
-                generate_button.click()
-                app.run()
-                self.assertEqual(list(app.exception), [])
-                self.assertTrue(any("Hãy nhập chủ đề" in error.value for error in app.error))
-
-                next(field for field in app.text_input if field.label == "Chủ đề / Topic *").set_value(
-                    "Product launch"
-                )
-                next(button for button in app.button if button.label == "✨ Tạo bài bằng AI").click()
-                app.run()
-                self.assertEqual(list(app.exception), [])
-                self.assertTrue(any("Hãy mô tả bài viết" in error.value for error in app.error))
-
-                next(
-                    control
-                    for control in app.segmented_control
-                    if control.label == "Bạn muốn bắt đầu từ đâu?"
-                ).set_value("source")
-                app.run()
-                upload_labels = {uploader.label for uploader in app.file_uploader}
-                self.assertIn("Hoặc upload nội dung gốc (.md/.txt)", upload_labels)
-                next(button for button in app.button if button.label == "✨ Tạo bài bằng AI").click()
-                app.run()
-                self.assertEqual(list(app.exception), [])
-                self.assertTrue(any("requires source content" in error.value for error in app.error))
+                self.assertTrue(process_button.disabled)
 
                 source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
                 self.assertIn("PipelineOrchestrator", source)
                 self.assertIn("PolicyBuilderInput", source)
+                self.assertIn("parse_content_markdown", source)
+                self.assertNotIn("Type PUBLISH to unlock", source)
         finally:
             if previous is None:
                 os.environ.pop("CONTENT_AGENT_DB", None)
@@ -201,6 +179,45 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertEqual(
                     [action["action"] for action in store.get_review_actions(run_id)],
                     ["approve"],
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("CONTENT_AGENT_DB", None)
+            else:
+                os.environ["CONTENT_AGENT_DB"] = previous
+
+    def test_failed_run_without_draft_renders_in_history(self) -> None:
+        previous = os.environ.get("CONTENT_AGENT_DB")
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                database = Path(directory) / "failed-run.sqlite3"
+                store = SQLiteRunStore(database)
+                policy = load_policy(FIXTURES / "policy_valid.md")
+                run_id = uuid4()
+                store.start_run(
+                    run_id=run_id,
+                    topic="Provider unavailable",
+                    policy=policy,
+                    source_path=FIXTURES / "policy_valid.md",
+                )
+                store.fail_run(
+                    run_id,
+                    error_code="network",
+                    error_message="Could not connect to provider.",
+                )
+
+                os.environ["CONTENT_AGENT_DB"] = str(database)
+                app = AppTest.from_file(
+                    str(ROOT / "streamlit_app.py"),
+                    default_timeout=15,
+                ).run()
+
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(
+                    any(
+                        "failed before a valid draft" in warning.value
+                        for warning in app.warning
+                    )
                 )
         finally:
             if previous is None:

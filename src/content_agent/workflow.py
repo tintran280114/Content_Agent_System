@@ -29,6 +29,7 @@ class DraftOrigin(StrEnum):
     INITIAL_AI = "initial_ai"
     AI_REWRITE = "ai_rewrite"
     HUMAN_EDIT = "human_edit"
+    MARKDOWN_IMPORT = "markdown_import"
 
 
 class ReviewActionType(StrEnum):

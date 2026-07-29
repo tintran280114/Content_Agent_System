@@ -1,24 +1,19 @@
 # Content request contract
 
-An account policy and source content are different inputs. They may both be
-Markdown files, but they have different lifetimes and purposes.
-
-Normal Streamlit users do not need to create either file. The default Quick
-Composer asks for a channel/profile, topic, and natural-language description
-of the desired post. The guided channel form generates the account policy
-behind the scenes. File inputs remain available for source transformation and
-advanced admin handoff.
+An account policy and content request are different Markdown inputs with
+different lifetimes and purposes. The Streamlit content flow accepts exactly
+one `.md`/`.markdown` file per run. Its `# Topic`, `# Instructions`, `# Source`
+or `# Content` sections map into the canonical `ContentRequest`.
 
 | Input | Meaning | Example | Lifetime |
 |---|---|---|---|
 | Account policy | Permanent account behavior | voice, audience, banned terms, rubric, publisher | reused for every run |
-| Topic | Subject Research Agent should investigate | `Offline mode launch` | one run |
-| Writing brief | Trusted operator directions | `Use three steps and end with a question` | one run |
-| Source content | Reference material the post must use | release note, article, transcript, old post | one run |
+| Content Markdown | Topic, brief, source or final post | `content-generate.md` | one run |
 
 Account policies are stored in `accounts/*.md` and discovered automatically.
-Source `.md`/`.txt` files are uploaded in **Create content** or supplied with
-`--content-file`; they are never scanned as account policies.
+Content Markdown is uploaded in **Create content**. CLI `--content-file` remains
+available for backward-compatible batch jobs and is never scanned as an account
+policy.
 
 ## Content tasks
 
@@ -34,6 +29,7 @@ Source `.md`/`.txt` files are uploaded in **Create content** or supplied with
 ```text
 ContentRequest
   request_id
+  mode: generate | publish
   topic
   instructions
   task
@@ -59,8 +55,9 @@ stored topic.
   commands embedded in source material.
 - The LLM Critic receives the request and Research brief so it can flag
   omissions, meaning changes, and unsupported claims.
-- Source content is limited to 30,000 characters to protect free-tier context
-  and quota. Accepted upload types are UTF-8 `.md` and `.txt`.
+- Source/final content is limited to 30,000 characters to protect free-tier
+  context and quota. The one-file UI accepts UTF-8 `.md`/`.markdown` up to
+  100 KB.
 - API keys and social tokens must never be placed in topic, instructions,
   source content, or account policy.
 

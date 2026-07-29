@@ -1,4 +1,4 @@
-"""Exercise the real Streamlit content request -> review -> approve -> dry-run journey."""
+"""Exercise Markdown upload -> review -> approve -> dry-run in the real Streamlit app."""
 
 from __future__ import annotations
 
@@ -23,11 +23,7 @@ from content_agent.platform import SQLiteRunStore
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--account", default="responsible-ai-lab")
-    parser.add_argument(
-        "--composer-mode",
-        choices=("prompt", "source"),
-        default="prompt",
-    )
+    parser.add_argument("--content-mode", choices=("generate", "publish"), default="generate")
     parser.add_argument(
         "--topic",
         default="Pre-publish checks for AI-assisted social content",
@@ -73,9 +69,9 @@ def main() -> int:
         "started_at": datetime.now(UTC).isoformat(),
         "account": args.account,
         "topic": args.topic,
-        "composer_mode": args.composer_mode,
-        "content_task": "create" if args.composer_mode == "prompt" else "repurpose",
-        "source_content_supplied": args.composer_mode == "source",
+        "content_mode": args.content_mode,
+        "content_task": "create",
+        "source_content_supplied": False,
         "database": str(database),
         "external_meta_called": False,
         "steps": [],
@@ -89,18 +85,38 @@ def main() -> int:
             raise RuntimeError(f"initial render failed: {list(app.exception)}")
         report["steps"].append("rendered")
 
-        if args.composer_mode == "source":
-            _element(app.segmented_control, "Bạn muốn bắt đầu từ đâu?").set_value("source")
-            app.run(timeout=args.timeout)
         _element(app.selectbox, "Kênh & phong cách").set_value(args.account)
-        _element(app.text_input, "Chủ đề / Topic *").set_value(args.topic)
-        if args.composer_mode == "prompt":
-            _element(app.text_area, "Bạn muốn AI viết bài như thế nào? *").set_value(args.instructions)
+        if args.content_mode == "generate":
+            markdown = f"""---
+mode: generate
+task: create
+pipeline: full
+---
+# Topic
+{args.topic}
+# Instructions
+{args.instructions}
+"""
         else:
-            _element(app.selectbox, "Bạn muốn xử lý nội dung gốc thế nào?").set_value("repurpose")
-            _element(app.text_area, "Bạn muốn AI biến đổi nội dung như thế nào?").set_value(args.instructions)
-            _element(app.text_area, "Dán nội dung gốc").set_value(args.source_content)
-        _element(app.button, "✨ Tạo bài bằng AI").click()
+            markdown = f"""---
+mode: publish
+task: create
+pipeline: full
+---
+# Topic
+{args.topic}
+# Content
+{args.source_content}
+
+#ResponsibleAI
+"""
+        _element(app.file_uploader, "Upload content Markdown *").upload(
+            "ui-live-smoke.md",
+            markdown.encode("utf-8"),
+            "text/markdown",
+        )
+        app.run(timeout=args.timeout)
+        _element(app.button, "Chạy content Markdown").click()
         app.run(timeout=args.timeout)
         if _errors(app):
             raise RuntimeError("generation UI error: " + " | ".join(_errors(app)))
@@ -111,17 +127,19 @@ def main() -> int:
             raise RuntimeError(f"expected one review item after generation, found {len(queue)}")
         run_id = queue[0]["run_id"]
         content_request = store.get_content_request(run_id)
-        research = store.get_research(run_id)
         draft = store.get_current_draft(run_id)
-        if research.request_id != content_request.request_id:
-            raise RuntimeError("Research brief lost the content request lineage")
+        if args.content_mode == "generate":
+            research = store.get_research(run_id)
+            if research.request_id != content_request.request_id:
+                raise RuntimeError("Research brief lost the content request lineage")
         if draft.request_id != content_request.request_id:
             raise RuntimeError("Draft post lost the content request lineage")
         report["run_id"] = run_id
         report["request_id"] = str(content_request.request_id)
+        report["request_mode"] = content_request.mode.value
         report["source_type"] = content_request.source_type.value
         report["source_characters"] = len(content_request.source_content)
-        report["research_request_match"] = True
+        report["research_request_match"] = args.content_mode == "generate"
         report["draft_request_match"] = True
         report["critic_score"] = queue[0]["score"]
         report["steps"].append("generated_to_human_review")

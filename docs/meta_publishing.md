@@ -79,31 +79,38 @@ If the app lacks `threads_keyword_search`, either grant that permission or set
 `trend_search: false`; the fixed `topic_tag` still works with the content
 publishing flow.
 
-### Paste or rotate an expired token manually
+### OAuth, encrypted storage, and automatic rotation
 
-1. Copy `.env.example` to `.env` once.
-2. Find the policy's `credential_ref`, for example
-   `THREADS_RESPONSIBLE_AI_TOKEN`.
-3. Paste or replace only that value in `.env`:
+The sidebar **Facebook & Threads** flow accepts a Meta OAuth authorization
+code, exchanges it for a short-lived Threads token, then exchanges that token
+for a long-lived token. It stores only the encrypted long-lived token in
+`CONTENT_AGENT_TOKEN_STORE`; the Fernet key and Threads App Secret stay in
+environment variables or deployment secrets.
 
-   ```dotenv
-   THREADS_RESPONSIBLE_AI_TOKEN=paste_new_token_here
-   ```
+```dotenv
+THREADS_APP_ID=
+THREADS_APP_SECRET=
+THREADS_REDIRECT_URI=http://localhost:8501
+THREADS_TOKEN_REFRESH_DAYS=7
+CONTENT_AGENT_TOKEN_ENCRYPTION_KEY=
+CONTENT_AGENT_TOKEN_STORE=artifacts/meta_tokens.enc
+```
 
-4. Run `python run.py --list-accounts` and confirm
-   `credential_present=true`.
-5. Validate with `--publish-mode dry-run`, then use the explicit live command.
+Before each Threads publish, `ThreadsTokenManager` checks the recorded expiry.
+Inside the configured refresh window it calls
+`GET /refresh_access_token?grant_type=th_refresh_token` and atomically rotates
+the encrypted record. A transient refresh network error falls back to the
+still-valid token; a rejected or expired token requires OAuth reconnect.
 
-For a new account, create a new uppercase variable name in both its Markdown
-policy and `.env`. Removing or pausing an account never requires putting its
-token in Markdown. An HTTP 401/403 is reported as `publish_authentication`;
-obtain/refresh the authorized token, replace the same `.env` value, and retry
-only after investigating any pending delivery reservation.
+A manually supplied long-lived token can still be used for the browser session.
+Supplying `{credential_ref}_EXPIRES_AT` in ISO-8601 format enables proactive
+refresh. Without an encryption key, a refreshed value cannot survive an app
+restart.
 
-Threads long-lived tokens have a documented 60-day lifetime and can be
-refreshed before expiry through the official refresh flow. This project keeps
-rotation manual so it never stores an app secret or refresh workflow in account
-Markdown.
+For a new account, create a new uppercase `credential_ref` in its account
+policy. Never put the token in Markdown. An HTTP 401/403 is reported as
+`publish_authentication`; investigate any pending delivery reservation before
+reconnecting or retrying.
 
 ### Scheduled automatic publishing
 

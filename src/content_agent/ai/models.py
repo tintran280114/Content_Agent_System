@@ -32,9 +32,9 @@ class TokenUsage(StrictModel):
 
 
 class GenerationMetadata(StrictModel):
-    provider: Literal["gemini", "groq", "github_models"]
+    provider: Literal["gemini", "groq", "github_models", "operator"]
     model: str = Field(min_length=1)
-    role: Literal["research", "copywriter", "critic"]
+    role: Literal["research", "copywriter", "critic", "operator"]
     prompt_version: str = Field(min_length=1)
     provider_sdk: str = Field(min_length=1)
     latency_ms: int = Field(ge=0)
@@ -107,6 +107,13 @@ class ContentSource(StrEnum):
     FILE = "file"
 
 
+class ContentMode(StrEnum):
+    """Whether Markdown requests AI generation or supplies the final post."""
+
+    GENERATE = "generate"
+    PUBLISH = "publish"
+
+
 class ContentRequest(StrictModel):
     """Frozen operator input kept separate from AI-generated content."""
 
@@ -117,6 +124,7 @@ class ContentRequest(StrictModel):
     source_name: str | None = Field(default=None, max_length=255)
     source_type: ContentSource = ContentSource.NONE
     task: ContentTask = ContentTask.CREATE
+    mode: ContentMode = ContentMode.GENERATE
 
     @model_validator(mode="after")
     def validate_source_and_task(self) -> ContentRequest:
@@ -142,6 +150,7 @@ class ContentRequest(StrictModel):
         source_content: str = "",
         source_name: str | None = None,
         task: ContentTask | str = ContentTask.CREATE,
+        mode: ContentMode | str = ContentMode.GENERATE,
     ) -> ContentRequest:
         normalized_source = source_content.strip()
         normalized_name = source_name.strip() if source_name else None
@@ -157,6 +166,7 @@ class ContentRequest(StrictModel):
             source_name=normalized_name,
             source_type=source_type,
             task=task,
+            mode=mode,
         )
 
     @property

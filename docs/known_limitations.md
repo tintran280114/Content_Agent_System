@@ -7,9 +7,13 @@
 - Threads trend-aware tagging compares recent result counts only among up to
   five operator-approved candidates. It is not a global trending-topic feed,
   and it requires the `threads_keyword_search` permission.
-- Meta token acquisition and refresh remain manual. The CLI reports only
-  present/missing status; it does not store passwords, cookies, app secrets, or
-  refresh tokens.
+- Threads OAuth and proactive long-lived-token refresh are available in the
+  Streamlit sidebar. Persistent rotation requires
+  `CONTENT_AGENT_TOKEN_ENCRYPTION_KEY`; local encrypted storage is not a
+  substitute for a production secret manager.
+- A Facebook Page token alone has no generic refresh-token flow. Automatic
+  Page-token reissuance requires a Meta App plus the corresponding Facebook
+  Login/user-token lifecycle, which is outside the current adapter.
 - Research uses supplied context and model knowledge, not live web grounding.
 - Source-content ingestion accepts UTF-8 `.md`/`.txt` or pasted text up to
   30,000 characters. PDF, Word, image OCR, URL fetching, and media generation

@@ -8,12 +8,14 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 import httpx
 
 from .critics import render_post
+from .meta_auth import EncryptedTokenStore, MetaAuthError, ThreadsTokenManager
 from .platform import SQLiteRunStore
 from .policy import AccountPolicy
 from .workflow import PublishReceipt, PublishStatus, WorkflowState
@@ -58,6 +60,44 @@ class EnvironmentCredentialResolver:
                 f"Publishing credential '{credential_ref}' is not configured.",
             )
         return value
+
+
+class ThreadsCredentialResolver:
+    """Resolve Threads tokens with proactive long-lived-token rotation."""
+
+    def __init__(
+        self,
+        env: Mapping[str, str] | None = None,
+        *,
+        client: Any | None = None,
+    ) -> None:
+        self.env = os.environ if env is None else env
+        try:
+            store = EncryptedTokenStore.from_env(self.env, base_dir=Path.cwd())
+            self.manager = ThreadsTokenManager(
+                env=self.env,
+                store=store,
+                client=client,
+            )
+        except MetaAuthError as exc:
+            raise PublishError(exc.code, str(exc), status_code=exc.status_code) from exc
+
+    def resolve(self, credential_ref: str) -> str:
+        try:
+            return self.manager.resolve(credential_ref)
+        except MetaAuthError as exc:
+            code = {
+                "missing_threads_token": "missing_publish_credential",
+                "threads_token_expired": "publish_authentication",
+                "threads_refresh_rejected": "publish_authentication",
+                "threads_refresh_connection": "publish_connection_error",
+            }.get(exc.code, exc.code)
+            raise PublishError(
+                code,
+                str(exc),
+                retryable=exc.code == "threads_refresh_connection",
+                status_code=exc.status_code,
+            ) from exc
 
 
 class HttpClient(Protocol):
@@ -206,10 +246,26 @@ class _MetaPublisher(_GuardedPublisher):
         self.mode = mode
         self.env = os.environ if env is None else env
         self.credential_resolver = credential_resolver or EnvironmentCredentialResolver(self.env)
-        self.client = client or httpx.Client()
+        self.client = client or httpx.Client(
+            limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=30.0)
+        )
         self.max_attempts = max_attempts
         self.base_backoff_seconds = max(0.0, base_backoff_seconds)
         self.sleeper = sleeper
+        try:
+            self.request_timeout_seconds = float(
+                self.env.get("META_REQUEST_TIMEOUT_SECONDS", "30")
+            )
+        except ValueError as exc:
+            raise PublishError(
+                "invalid_meta_timeout",
+                "META_REQUEST_TIMEOUT_SECONDS must be a number.",
+            ) from exc
+        if not 5 <= self.request_timeout_seconds <= 120:
+            raise PublishError(
+                "invalid_meta_timeout",
+                "META_REQUEST_TIMEOUT_SECONDS must be between 5 and 120 seconds.",
+            )
 
     def _version(self) -> str:
         version = self.env.get(self.version_env, self.default_version).strip()
@@ -295,7 +351,7 @@ class _MetaPublisher(_GuardedPublisher):
                     url,
                     data=data,
                     headers=headers,
-                    timeout=30.0,
+                    timeout=self.request_timeout_seconds,
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if attempt >= self.max_attempts:
@@ -363,7 +419,7 @@ class _MetaPublisher(_GuardedPublisher):
                     url,
                     params=params,
                     headers=headers,
-                    timeout=30.0,
+                    timeout=self.request_timeout_seconds,
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 if attempt >= self.max_attempts:
@@ -524,6 +580,37 @@ class ThreadsPublisher(_MetaPublisher):
     graph_host = "https://graph.threads.net"
     version_env = "THREADS_GRAPH_API_VERSION"
     default_version = "v1.0"
+
+    def __init__(
+        self,
+        store: SQLiteRunStore,
+        *,
+        mode: PublishMode,
+        credential_resolver: CredentialResolver | None = None,
+        client: HttpClient | None = None,
+        env: Mapping[str, str] | None = None,
+        max_attempts: int = 3,
+        base_backoff_seconds: float = 1.0,
+        sleeper: SleepFunction = time.sleep,
+    ) -> None:
+        runtime = os.environ if env is None else env
+        active_client = client or httpx.Client(
+            limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=30.0)
+        )
+        resolver = credential_resolver or ThreadsCredentialResolver(
+            runtime,
+            client=active_client,
+        )
+        super().__init__(
+            store,
+            mode=mode,
+            credential_resolver=resolver,
+            client=active_client,
+            env=runtime,
+            max_attempts=max_attempts,
+            base_backoff_seconds=base_backoff_seconds,
+            sleeper=sleeper,
+        )
 
     @staticmethod
     def _topic_tag_candidates(policy: AccountPolicy) -> list[str]:

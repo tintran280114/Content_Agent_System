@@ -17,10 +17,9 @@ post.
 ## Recorded journey
 
 1. Show the six-step header and the numbered tabs.
-2. In **1 · Create content**, keep **Tạo mới từ prompt**, use the
-   `responsible-ai-lab` channel, and enter the prepared topic/content prompt
-   from `docs/demo_guide_vi.md`.
-3. Click **Tạo bài bằng AI**. Show the generated post, Critic score,
+2. In **1 · Create content**, download the Generate template, use the
+   `responsible-ai-lab` channel, fill its Topic/Instructions, and upload it.
+3. Click **Chạy content Markdown**. Show the parsed contract, generated post, Critic score,
    workflow state, Run ID, Request ID, and the original input lineage.
 4. Open **2 · Review & approve**. Show score, violations, suggestions, current
    post, and source content. Enter an operator and approval note, then click
@@ -30,6 +29,8 @@ post.
 6. Open **3 · Publish** and click **Run publishing dry-run**. Show the saved
    receipt and explain that dry-run neither reads a Meta token nor sends an
    external request.
+   Explain that live Publish is now one click; the typed `PUBLISH` operation
+   input is gone while backend state/permission/idempotency guards remain.
 7. Open **5 · Analytics**. Show run events, revisions, Critic results, audit
    actions, provider/model token usage, and **Data transfer**.
 8. Download the uniquely named SQLite snapshot. Explain that one canonical

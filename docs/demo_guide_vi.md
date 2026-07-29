@@ -1,151 +1,90 @@
-# Hướng dẫn demo Social Content Agent
+# Demo guide — Social Content Agent Studio
 
-Tài liệu này dùng cho một video khoảng 5–7 phút. Kịch bản gọi AI thật nhưng chỉ
-`dry-run` phần đăng bài, vì vậy không tạo bài Facebook/Threads ngoài hệ thống.
+Kịch bản này dùng `dry-run` để chứng minh full flow mà không tạo bài thật.
+Hướng dẫn setup Facebook/Threads chi tiết nằm trong
+[user journey](user_journey_vi.md).
 
-## 1. Mở app bằng database demo riêng
-
-Mở PowerShell tại thư mục project:
+## 1. Chuẩn bị
 
 ```powershell
 cd D:\Fantek_material\AI_AgentSystem\Content_Agent_System
-$env:CONTENT_AGENT_DB = "$PWD\artifacts\demo_video_20260725.sqlite3"
-.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+streamlit run streamlit_app.py
 ```
 
-Mở `http://localhost:8501`. Nếu quay lại nhiều lần, đổi tên
-`demo_video_20260725.sqlite3` để có màn hình sạch mà không phải xóa dữ liệu cũ.
+Trong sidebar:
 
-## 2. Kiểm tra ba kết nối AI
+1. Nhập tên operator.
+2. Mở **Kết nối AI** và bấm **Kiểm tra 3 kết nối**.
+3. Mở **Facebook & Threads** và show trạng thái credential.
 
-1. Mở **🔑 Kết nối AI** ở sidebar.
-2. Nếu key đã nằm trong `.env`/Streamlit Secrets, để trống cả ba ô. App sẽ hiện
-   `Key mặc định hệ thống đang hoạt động`.
-3. Nếu muốn thay key tạm thời, dán vào ô tương ứng. Key nhập tay chỉ ghi đè
-   trong phiên trình duyệt và không được lưu vào Markdown/SQLite.
-4. Bấm **Kiểm tra 3 kết nối**.
-5. Chỉ tiếp tục khi Gemini Research, Groq Copywriter và GitHub Models Critic đều
-   hiện `ready`.
+## 2. Tạo bài bằng một file Markdown
 
-Không mở file `.env` trong lúc quay và không đọc key thành tiếng.
+Mở **1 · Create content**:
 
-## 3. Tạo content mới chỉ bằng prompt
+1. Tải **template Generate**.
+2. Sửa `# Topic`, `# Instructions` và tùy chọn `# Source`.
+3. Chọn channel.
+4. Upload file `.md`.
+5. Show parser preview: mode, task, pipeline, block types và topic.
+6. Bấm **Chạy content Markdown**.
 
-Mở **1 · Create content**, giữ chế độ **✨ Tạo mới từ prompt** và nhập:
+App chạy Research → Copywriter → hard-rule Critic → LLM Critic. Show result,
+score, Run ID, Request ID và Draft ID.
 
-- **Kênh & phong cách:** `responsible-ai-lab`
-- **Chủ đề / Topic:** `Pre-publish checks for AI-assisted social content`
-- **Mục tiêu bài viết:** `Chia sẻ kiến thức / hướng dẫn`
-- **Bạn muốn AI viết bài như thế nào?:**
+Để chứng minh không bắt buộc dùng AI, upload **template Publish** với
+`mode: publish`. App nhập bài hoàn chỉnh vào workflow và usage AI bằng zero.
 
-```text
-Write a practical three-step post about the topic and end with one question for small-team leaders.
-```
-
-- **Pipeline:** `Full`
-
-Bấm **✨ Tạo bài bằng AI**. Bình thường flow mất khoảng 30–90 giây:
-
-```text
-Gemini Research → Groq Copywriter → rule Critic → GitHub Models Critic
-                                      ↓ nếu chưa đạt
-                               rewrite tối đa 2 lần
-```
-
-Kết quả mong đợi:
-
-- có bài viết sinh ra;
-- có Critic score và workflow state;
-- có Run ID, Request ID và Draft ID;
-- state chuyển sang `human_review`;
-- phần “View the exact input” vẫn giữ đúng topic và prompt người dùng.
-
-Nút tạo bài không đăng bài ra Meta.
-
-Muốn demo nguồn có sẵn, chuyển sang **📄 Biến nội dung có sẵn thành bài đăng**,
-chọn chuyển thể/viết lại/tóm tắt, rồi dán text hoặc upload `.md/.txt`.
-
-## 4. Duyệt bài và kiểm tra phản hồi Approve
+## 3. Review và approve
 
 Mở **2 · Review & approve**:
 
-1. Chọn run vừa tạo.
-2. Cho camera thấy Post preview, Critic score, threshold, violations,
-   suggestions và số lần rewrite.
-3. Có thể mở tab **Edit** để chỉ ra hệ thống tạo revision mới và vẫn yêu cầu
-   duyệt lại; trong video ngắn thì không cần lưu edit.
-4. Quay lại tab **Approve**.
-5. **Operator:** tên hoặc email của người duyệt.
-6. **Approval note:**
+1. Chọn run.
+2. Show original Markdown request, current post, score và violations.
+3. Nhập operator và approval note.
+4. Bấm **Approve and move to Publish**.
+5. Show result panel: action, state, Run ID, Draft ID và operator.
 
-```text
-Checked the final content, factual claims, tone, CTA, and account-policy constraints.
-```
-
-7. Bấm **Approve and move to Publish**.
-
-Sau khi bấm, app phải hiện panel xác nhận gồm:
-
-- `Approved successfully`;
-- action `approve`;
-- new state `approved`;
-- Run ID, Draft ID và operator;
-- hướng dẫn bước kế tiếp và lệnh CLI dry-run.
-
-Đây là phần nên quay rõ để chứng minh nút Approve có phản hồi và audit.
-
-## 5. Dry-run phần đăng bài
+## 4. Publish
 
 Mở **3 · Publish**:
 
-1. Chọn approved post vừa duyệt.
-2. Kiểm tra preview và destination.
+1. Chọn approved post.
+2. Kiểm tra preview, destination và credential reference.
 3. Bấm **Run publishing dry-run**.
-4. Cho camera thấy `Publish result: dry_run` và bảng Delivery receipts.
+4. Show `Publish result: dry_run` và Delivery receipts.
 
-Dry-run không đọc Meta token, không gọi Meta và không tạo bài thật. Khu vực live
-bị khóa nếu policy vẫn dùng target ID mẫu; muốn live phải đồng thời xác nhận,
-gõ `PUBLISH`, thay ID thật và có token hợp lệ.
+Dry-run không đọc Meta token và không gọi Meta. Nếu quay live demo, thay target
+ID thật, có Page/Threads token hợp lệ rồi bấm **Publish live now**. Không còn
+checkbox hoặc ô nhập chuỗi `PUBLISH`; một click gửi ngay, trong khi backend vẫn
+kiểm tra state, permission, credential, target và idempotency.
 
-## 6. Chứng minh audit, token và SQLite
+## 5. Threads
+
+Trong sidebar **Facebook & Threads**:
+
+1. Show Threads App ID/Redirect URI.
+2. Bấm **Đăng nhập và cấp quyền Threads**.
+3. Sau redirect, exchange authorization code.
+4. Show User ID, expiry và encrypted-store status.
+5. Giải thích app tự refresh long-lived token trong bảy ngày trước hạn.
+6. Trong account policy, show `topic_tag_candidates` và `trend_search`.
+
+## 6. Audit
 
 Mở **5 · Analytics**:
 
-1. **Run history:** chọn run và mở Events, Revisions, Critics, Reviews,
-   Publishing, Artifacts.
-2. **Scores:** cho thấy score theo bài/account.
-3. **Usage:** cho thấy token, request và retry theo provider/model.
-4. **Data transfer:** tải **Download prepared unique snapshot**.
+- Run history: input mode, state và terminal error.
+- Score history: policy/account score.
+- Tokens & quota: provider/model/request/retry.
+- Data transfer: SQLite snapshot có tên timestamp + random suffix; tối đa 20
+  snapshot local.
 
-Tên snapshot có timestamp và chuỗi ngẫu nhiên để không đè file cũ. App dùng một
-database vận hành chính, còn thư mục snapshot chỉ giữ tối đa 20 bản gần nhất;
-không tạo 20 database vận hành cạnh tranh nhau.
+## 7. Câu kết video
 
-## 7. Nói ngắn về kênh, cấu hình nâng cao và Threads community tag
-
-Mở **4 · Accounts & policies → Kênh hiện có**, chọn
-`responsible-ai-lab`. Giải thích:
-
-- người dùng có thể tạo account bằng tab **Tạo kênh bằng form**, không cần biết
-  Markdown;
-- phía sau, mỗi account vẫn là một file `.md` để thêm/xóa mà không sửa Python;
-- Markdown giữ audience, tone, constraints, rubric, model route và đích đăng;
-- API key/token không nằm trong Markdown;
-- Threads policy có `topic_tag`, `topic_tag_candidates` và `trend_search`;
-- khi live và có quyền `threads_keyword_search`, hệ thống so sánh các tag ứng
-  viên trong niche rồi lưu tag được chọn vào delivery receipt.
-
-Facebook trong project là Facebook Page qua API chính thức. Hệ thống không tự
-đăng bằng mật khẩu/cookie của tài khoản cá nhân hoặc acc clone.
-
-## 8. Lệnh kiểm tra dự phòng trước khi quay
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m pip check
-python run.py --list-accounts
-```
-
-Kết quả release hiện tại: 112 test pass, lint/format/compile/dependency sạch và
-package `0.7.0` build được.
+“Một content Markdown đi xuyên suốt từ input tới audit. AI generation và manual
+publish-ready content dùng chung policy/review/publisher. Nút Publish không còn
+typed confirmation, nhưng tất cả backend guard vẫn còn. Facebook Page chạy bằng
+Page Token; Threads có OAuth, encrypted token rotation và trend-aware topic
+tag.”
