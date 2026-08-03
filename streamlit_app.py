@@ -324,6 +324,69 @@ def _clear_manual_credentials() -> None:
     }
 
 
+def _render_threads_post_card(
+    account_id: str,
+    platform: str,
+    topic_tag: str | None,
+    content: str,
+    *,
+    timestamp: str = "1 phút",
+) -> None:
+    """Render a visual Threads post card mimicking the official Threads post UI."""
+    initial = (account_id[0] if account_id else "T").upper()
+    if topic_tag and topic_tag.strip():
+        clean_tag = topic_tag.strip().removeprefix("#")
+        tag_html = f"""
+        <span style="display: inline-flex; align-items: center; gap: 4px; background: rgba(255, 69, 58, 0.18); border: 1.5px solid #ff453a; color: #ff453a; font-weight: 700; padding: 2px 10px; border-radius: 14px; font-size: 13px; margin-left: 6px; box-shadow: 0 0 10px rgba(255, 69, 58, 0.25);">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+          </svg>
+          {clean_tag}
+        </span>
+        """
+    else:
+        tag_html = """
+        <span style="display: inline-flex; align-items: center; color: #8e8e93; font-size: 12px; font-style: italic; margin-left: 6px;">
+          (Chưa gán Topic Tag)
+        </span>
+        """
+
+    formatted_content = (
+        content.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br>")
+    )
+
+    card_html = f"""
+    <div style="background-color: #101010; color: #f5f5f5; border: 1px solid #2a2a2a; border-radius: 16px; padding: 18px 22px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin-top: 8px; margin-bottom: 16px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #6d5dfc, #14b8a6); display: flex; align-items: center; justify-content: center; font-weight: 700; color: #ffffff; font-size: 17px; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">
+            {initial}
+          </div>
+          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 15px; font-weight: 600;">
+            <span style="color: #ffffff; font-weight: 700;">{account_id}</span>
+            <span style="color: #8e8e93; font-weight: 400; font-size: 16px; margin: 0 2px;">›</span>
+            {tag_html}
+          </div>
+        </div>
+        <span style="color: #8e8e93; font-size: 13px; font-weight: 500;">{timestamp}</span>
+      </div>
+      <div style="font-size: 15px; line-height: 1.55; color: #ececec; margin-bottom: 16px; word-break: break-word;">
+        {formatted_content}
+      </div>
+      <div style="display: flex; align-items: center; gap: 24px; color: #8e8e93; font-size: 18px; padding-top: 10px; border-top: 1px solid #1e1e1e;">
+        <span style="cursor: pointer;" title="Like">♡</span>
+        <span style="cursor: pointer;" title="Reply">💬</span>
+        <span style="cursor: pointer;" title="Repost">⇄</span>
+        <span style="cursor: pointer;" title="Share">✈</span>
+      </div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
+
+
 def _render_social_connections(catalog: dict[str, tuple[Path, object]]) -> None:
     """Render platform credentials without exposing their values."""
 
@@ -707,6 +770,7 @@ def _show_generation_result(store: SQLiteRunStore) -> None:
         request = store.get_content_request(run_id)
         workflow = store.get_workflow(run_id)
         critic = store.get_latest_critic(run_id)
+        policy = store.get_policy(run_id)
     except (KeyError, ValueError):
         st.session_state.pop("generation_result", None)
         return
@@ -715,10 +779,22 @@ def _show_generation_result(store: SQLiteRunStore) -> None:
         f"{origin} completed · state `{workflow['state']}` · "
         f"score `{critic.score if critic else 'not scored'}`"
     )
+    topic_tag = policy.publishing.topic_tag or (
+        policy.publishing.topic_tag_candidates[0]
+        if policy.publishing.topic_tag_candidates
+        else None
+    )
+    st.markdown("**Xem trước giao diện Threads (Threads Topic Tag khoanh màu đỏ):**")
+    _render_threads_post_card(
+        account_id=policy.account_id,
+        platform=policy.platform,
+        topic_tag=topic_tag,
+        content=render_post(draft),
+    )
     st.text_area(
         "Generated post" if request.mode == ContentMode.GENERATE else "Imported final post",
         value=render_post(draft),
-        height=210,
+        height=180,
         disabled=True,
         key=f"generated_post_{run_id}",
     )
@@ -753,6 +829,8 @@ def _publish_result_panel() -> None:
     renderer(
         f"Publish result: `{result['status']}` · destination `{result['destination']}` · {result['reason']}"
     )
+    if result.get("topic_tag"):
+        st.info(f"📌 **Threads Topic Tag xuất bản:** `{result['topic_tag']}` (Hiển thị khoanh màu đỏ bên cạnh username trên Threads)")
     st.caption(
         f"Publish ID: `{result['publish_id']}` · Remote post: `{result.get('remote_post_id') or 'none'}`"
     )
@@ -1163,10 +1241,22 @@ with review_tab:
                     )
                 else:
                     st.write("**Source content:** None — created from topic and policy.")
+            topic_tag = policy.publishing.topic_tag or (
+                policy.publishing.topic_tag_candidates[0]
+                if policy.publishing.topic_tag_candidates
+                else None
+            )
+            st.markdown("**Giao diện hiển thị thực tế (Threads Post Card với Topic Tag khoanh màu đỏ):**")
+            _render_threads_post_card(
+                account_id=policy.account_id,
+                platform=policy.platform,
+                topic_tag=topic_tag,
+                content=render_post(draft),
+            )
             st.text_area(
-                "Current post",
+                "Current post text",
                 value=render_post(draft),
-                height=240,
+                height=160,
                 disabled=True,
             )
             st.download_button(
@@ -1338,10 +1428,22 @@ with publish_tab:
             f"Topic: {publish_request.topic} · task `{publish_request.task.value}` · "
             f"source `{publish_request.source_type.value}`"
         )
+        publish_topic_tag = publish_policy.publishing.topic_tag or (
+            publish_policy.publishing.topic_tag_candidates[0]
+            if publish_policy.publishing.topic_tag_candidates
+            else None
+        )
+        st.markdown("**Giao diện đăng chuẩn Threads (Threads Topic Tag khoanh màu đỏ):**")
+        _render_threads_post_card(
+            account_id=publish_policy.account_id,
+            platform=publish_policy.platform,
+            topic_tag=publish_topic_tag,
+            content=render_post(publish_draft),
+        )
         st.text_area(
-            "Post to deliver",
+            "Post text to deliver",
             value=render_post(publish_draft),
-            height=200,
+            height=160,
             disabled=True,
             key="publish_preview",
         )

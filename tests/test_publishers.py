@@ -12,6 +12,7 @@ from content_agent.platform import SQLiteRunStore
 from content_agent.policy import parse_policy_text
 from content_agent.publisher import (
     FacebookPagePublisher,
+    MockPublisher,
     PublishError,
     ThreadsPublisher,
 )
@@ -24,7 +25,8 @@ def policy_text(
     target_id: str,
     publishing_extra: str = "",
 ) -> str:
-    return f"""# Account Policy: delivery-test
+    if adapter != "mock":
+        return f"""# Account Policy: delivery-test
 
 ## Account
 - account_id: delivery-test
@@ -72,6 +74,56 @@ English
 - adapter: {adapter}
 - target_id: {target_id}
 - credential_ref: {credential_ref}
+- approval_required: false
+{publishing_extra}
+"""
+
+    return f"""# Account Policy: delivery-test
+
+## Account
+- account_id: delivery-test
+- spec_version: 0.2
+- active: true
+
+## Goal
+Publish useful test content through a guarded delivery adapter.
+
+## Audience
+Software teams testing social automation.
+
+## Platform
+Meta
+
+## Tone
+Clear and practical.
+
+## Language
+English
+
+## Constraints
+- Keep the post concise.
+
+## Examples
+- A safe publisher separates account policy from access tokens.
+- Dry-run every new target before enabling live delivery.
+
+## Rubric
+- policy_compliance: 60
+- clarity: 40
+
+## Threshold
+80
+
+## Maximum Length
+500
+
+## Model Route
+- research: gemini@gemini-test
+- copywriter: groq@groq-test
+- critic: github_models@github-test
+
+## Publishing
+- adapter: mock
 - approval_required: false
 {publishing_extra}
 """
@@ -499,6 +551,18 @@ class PublisherTests(unittest.TestCase):
         attempt = self.store.get_publish_attempts(run_id)[0]
         self.assertEqual(attempt["status"], "failed")
         self.assertEqual(attempt["http_status"], 401)
+
+
+    def test_mock_publisher_validates_and_publishes(self) -> None:
+        run_id, _ = self.create_publishable_run(
+            adapter="mock",
+            credential_ref="MOCK_TOKEN",
+            target_id="mock_target",
+        )
+        publisher = MockPublisher(self.store)
+        receipt = publisher.publish(run_id)
+        self.assertEqual(receipt.status, PublishStatus.PUBLISHED)
+        self.assertIsNone(receipt.topic_tag)
 
 
 if __name__ == "__main__":

@@ -191,7 +191,7 @@ class MockPublisher(_GuardedPublisher):
     """Record a publish receipt without calling any social-platform API."""
 
     def publish(self, run_id: UUID | str) -> PublishReceipt:
-        workflow, draft, _ = self._context(run_id)
+        workflow, draft, policy = self._context(run_id)
         state = str(workflow["state"])
         allowed = state in self.ALLOWED_STATES
         destination = "mock"
@@ -200,12 +200,18 @@ class MockPublisher(_GuardedPublisher):
         existing = self._existing(key)
         if existing:
             return existing
+        topic_tag = policy.publishing.topic_tag or (
+            policy.publishing.topic_tag_candidates[0]
+            if policy.publishing.topic_tag_candidates
+            else None
+        )
         receipt = PublishReceipt(
             run_id=UUID(str(run_id)),
             draft_id=draft.draft_id,
             idempotency_key=key,
             status=PublishStatus.PUBLISHED if allowed else PublishStatus.BLOCKED,
             destination=destination,
+            topic_tag=topic_tag,
             reason=(
                 f"Mock publish accepted from workflow state '{state}'."
                 if allowed
