@@ -349,11 +349,11 @@ def _render_threads_post_card(
     if topic_tag and topic_tag.strip():
         clean_tag = topic_tag.strip().removeprefix("#")
         tag_html = (
-            f'<span style="display: inline-flex; align-items: center; gap: 4px; background: rgba(255, 69, 58, 0.18); '
-            f'border: 1.5px solid #ff453a; color: #ff453a; font-weight: 700; padding: 2px 10px; border-radius: 14px; '
-            f'font-size: 13px; margin-left: 6px; box-shadow: 0 0 10px rgba(255, 69, 58, 0.25);">'
-            f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
-            f'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
+            f'<span style="display: inline-flex; align-items: center; gap: 5px; background: #162638; '
+            f'border: 1px solid #254160; color: #38bdf8; font-weight: 700; padding: 3px 11px; border-radius: 14px; '
+            f'font-size: 13px; margin-left: 6px; box-shadow: 0 2px 8px rgba(56, 189, 248, 0.15);">'
+            f'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">'
+            f'<circle cx="12" cy="6" r="2.5"/><circle cx="6" cy="16" r="2.5"/><circle cx="18" cy="16" r="2.5"/>'
             f'</svg>'
             f'{clean_tag}'
             f'</span>'
