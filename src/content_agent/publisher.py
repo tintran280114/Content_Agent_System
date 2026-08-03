@@ -686,18 +686,29 @@ class ThreadsPublisher(_MetaPublisher):
             except PublishError as exc:
                 self._failed(pending, exc, attempt_count=0)
                 raise
+            draft = self.store.get_current_draft(run_id)
+            draft_tag = getattr(draft, "topic_tag", None)
             candidates = self._topic_tag_candidates(policy)
-            topic_tag = policy.publishing.topic_tag or (candidates[0] if candidates else None)
+            topic_tag = (
+                draft_tag
+                or policy.publishing.topic_tag
+                or (candidates[0] if candidates else None)
+            )
             return self._dry_run(run_id, pending=pending, topic_tag=topic_tag)
         total_attempts = 0
         try:
             token = self.credential_resolver.resolve(str(policy.publishing.credential_ref))
             version = self._version()
-            topic_tag, search_attempts = self._select_topic_tag(
-                policy=policy,
-                token=token,
-                version=version,
-            )
+            draft = self.store.get_current_draft(run_id)
+            if getattr(draft, "topic_tag", None):
+                topic_tag = draft.topic_tag.strip()
+                search_attempts = 0
+            else:
+                topic_tag, search_attempts = self._select_topic_tag(
+                    policy=policy,
+                    token=token,
+                    version=version,
+                )
             total_attempts += search_attempts
             base_url = f"{self.graph_host}/{version}/{policy.publishing.target_id}"
             container_data = {

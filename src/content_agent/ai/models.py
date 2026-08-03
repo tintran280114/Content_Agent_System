@@ -200,6 +200,7 @@ class DraftPayload(StrictModel):
     hashtags: list[str] = Field(default_factory=list, max_length=12)
     call_to_action: str = ""
     policy_constraints_applied: list[str] = Field(default_factory=list)
+    topic_tag: str | None = Field(default=None, max_length=50)
 
 
 class DraftPost(DraftPayload):

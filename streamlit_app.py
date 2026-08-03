@@ -796,7 +796,7 @@ def _show_generation_result(store: SQLiteRunStore) -> None:
         f"{origin} completed · state `{workflow['state']}` · "
         f"score `{critic.score if critic else 'not scored'}`"
     )
-    topic_tag = policy.publishing.topic_tag or (
+    topic_tag = getattr(draft, "topic_tag", None) or policy.publishing.topic_tag or (
         policy.publishing.topic_tag_candidates[0]
         if policy.publishing.topic_tag_candidates
         else None
@@ -1258,7 +1258,7 @@ with review_tab:
                     )
                 else:
                     st.write("**Source content:** None — created from topic and policy.")
-            topic_tag = policy.publishing.topic_tag or (
+            topic_tag = getattr(draft, "topic_tag", None) or policy.publishing.topic_tag or (
                 policy.publishing.topic_tag_candidates[0]
                 if policy.publishing.topic_tag_candidates
                 else None
@@ -1346,6 +1346,12 @@ with review_tab:
                     value=draft.content,
                     height=200,
                 )
+                edited_topic_tag = st.text_input(
+                    "Threads Topic Tag (Tùy chỉnh)",
+                    value=getattr(draft, "topic_tag", "") or policy.publishing.topic_tag or "",
+                    key=f"edit_topic_tag_{selected_run}",
+                    help="Nhập Topic Tag muốn hiển thị bên cạnh username trên Threads Meta.",
+                )
                 note = st.text_area(
                     "Edit note",
                     placeholder="Explain what changed and why.",
@@ -1358,6 +1364,7 @@ with review_tab:
                             selected_run,
                             actor=actor,
                             content=edited_content,
+                            topic_tag=edited_topic_tag,
                             note=note,
                             expected_version=int(item["version"]),
                         )
@@ -1445,7 +1452,7 @@ with publish_tab:
             f"Topic: {publish_request.topic} · task `{publish_request.task.value}` · "
             f"source `{publish_request.source_type.value}`"
         )
-        publish_topic_tag = publish_policy.publishing.topic_tag or (
+        publish_topic_tag = getattr(publish_draft, "topic_tag", None) or publish_policy.publishing.topic_tag or (
             publish_policy.publishing.topic_tag_candidates[0]
             if publish_policy.publishing.topic_tag_candidates
             else None

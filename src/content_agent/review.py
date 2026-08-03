@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 from .critics import RuleCritic
@@ -100,6 +101,7 @@ class ReviewService:
         *,
         actor: str,
         content: str,
+        topic_tag: str | None = None,
         note: str = "",
         expected_version: int | None = None,
     ):
@@ -110,7 +112,10 @@ class ReviewService:
         workflow = self._require_human_review(run_id)
         version = int(workflow["version"]) if expected_version is None else expected_version
         current = self.store.get_current_draft(run_id)
-        edited = current.model_copy(update={"draft_id": uuid4(), "content": content})
+        update_dict: dict[str, Any] = {"draft_id": uuid4(), "content": content}
+        if topic_tag is not None:
+            update_dict["topic_tag"] = topic_tag.strip() or None
+        edited = current.model_copy(update=update_dict)
         revision = self.store.next_revision_number(run_id)
         self.store.save_draft_revision(
             run_id=run_id,
