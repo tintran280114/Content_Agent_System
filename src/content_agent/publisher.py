@@ -299,10 +299,13 @@ class _MetaPublisher(_GuardedPublisher):
         if existing:
             if existing.status in {PublishStatus.PUBLISHED, PublishStatus.DRY_RUN}:
                 return workflow, draft, policy, key, existing
-            raise PublishError(
-                "publish_attempt_already_reserved",
-                f"Publish attempt '{key[:12]}' is already {existing.status.value}.",
-            )
+            if existing.status in {PublishStatus.FAILED, PublishStatus.BLOCKED}:
+                key = _idempotency_key(run_id, draft.draft_id, f"{key_destination}:{uuid4().hex[:8]}")
+            else:
+                raise PublishError(
+                    "publish_attempt_already_reserved",
+                    f"Publish attempt '{key[:12]}' is already {existing.status.value}.",
+                )
         state = str(workflow["state"])
         allowed_states = set(self.ALLOWED_STATES)
         if self.mode == "live":
