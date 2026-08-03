@@ -283,7 +283,11 @@ def _configured_secret(key: str) -> str:
 
 
 def _credential_source(key: str) -> str:
-    manual = str(st.session_state.get(f"runtime_secret_{key}", "") or "").strip()
+    manual = str(
+        st.session_state.get(f"runtime_secret_{key}", "")
+        or st.session_state.get(f"manual_token_input_{key}", "")
+        or ""
+    ).strip()
     if manual:
         return "manual"
     if _configured_secret(key):
@@ -294,13 +298,21 @@ def _credential_source(key: str) -> str:
 def _runtime_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     runtime = dict(os.environ)
     for credential in (*PROVIDER_CREDENTIALS, *META_CONFIGURATION):
-        override = st.session_state.get(f"runtime_secret_{credential}", "").strip()
+        override = (
+            st.session_state.get(f"runtime_secret_{credential}", "")
+            or st.session_state.get(f"manual_token_input_{credential}", "")
+            or ""
+        ).strip()
         value = override or _configured_secret(credential)
         if value:
             runtime[credential] = value
     for key, raw_value in st.session_state.items():
         if key.startswith("runtime_secret_") and str(raw_value or "").strip():
             runtime[key.removeprefix("runtime_secret_")] = str(raw_value).strip()
+        if key.startswith("manual_token_input_") and str(raw_value or "").strip():
+            credential_ref = key.removeprefix("manual_token_input_")
+            if credential_ref not in runtime and str(raw_value).strip():
+                runtime[credential_ref] = str(raw_value).strip()
         if key.startswith("runtime_expiry_") and str(raw_value or "").strip():
             credential_ref = key.removeprefix("runtime_expiry_")
             runtime[f"{credential_ref}_EXPIRES_AT"] = str(raw_value).strip()
@@ -465,7 +477,7 @@ def _render_social_connections(catalog: dict[str, tuple[Path, object]]) -> None:
     manual_token = st.text_input(
         f"{credential_ref} (session only)",
         type="password",
-        key=f"runtime_secret_{credential_ref}",
+        key=f"manual_token_input_{credential_ref}",
         placeholder=(
             "Không bắt buộc · đang dùng token hệ thống"
             if _configured_secret(credential_ref)
