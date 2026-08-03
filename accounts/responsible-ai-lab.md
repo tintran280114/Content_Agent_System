@@ -56,7 +56,7 @@ English
 
 ## Publishing
 - adapter: threads
-- target_id: 000000000000002
+- target_id: 27929250196705793
 - credential_ref: THREADS_RESPONSIBLE_AI_TOKEN
 - approval_required: true
 - topic_tag: Responsible AI
