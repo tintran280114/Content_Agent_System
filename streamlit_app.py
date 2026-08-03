@@ -348,20 +348,22 @@ def _render_threads_post_card(
     initial = (account_id[0] if account_id else "T").upper()
     if topic_tag and topic_tag.strip():
         clean_tag = topic_tag.strip().removeprefix("#")
-        tag_html = f"""
-        <span style="display: inline-flex; align-items: center; gap: 4px; background: rgba(255, 69, 58, 0.18); border: 1.5px solid #ff453a; color: #ff453a; font-weight: 700; padding: 2px 10px; border-radius: 14px; font-size: 13px; margin-left: 6px; box-shadow: 0 0 10px rgba(255, 69, 58, 0.25);">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-          </svg>
-          {clean_tag}
-        </span>
-        """
+        tag_html = (
+            f'<span style="display: inline-flex; align-items: center; gap: 4px; background: rgba(255, 69, 58, 0.18); '
+            f'border: 1.5px solid #ff453a; color: #ff453a; font-weight: 700; padding: 2px 10px; border-radius: 14px; '
+            f'font-size: 13px; margin-left: 6px; box-shadow: 0 0 10px rgba(255, 69, 58, 0.25);">'
+            f'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+            f'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
+            f'</svg>'
+            f'{clean_tag}'
+            f'</span>'
+        )
     else:
-        tag_html = """
-        <span style="display: inline-flex; align-items: center; color: #8e8e93; font-size: 12px; font-style: italic; margin-left: 6px;">
-          (Chưa gán Topic Tag)
-        </span>
-        """
+        tag_html = (
+            '<span style="display: inline-flex; align-items: center; color: #8e8e93; font-size: 12px; font-style: italic; margin-left: 6px;">'
+            '(Chưa gán Topic Tag)'
+            '</span>'
+        )
 
     formatted_content = (
         content.replace("&", "&amp;")
@@ -370,33 +372,36 @@ def _render_threads_post_card(
         .replace("\n", "<br>")
     )
 
-    card_html = f"""
-    <div style="background-color: #101010; color: #f5f5f5; border: 1px solid #2a2a2a; border-radius: 16px; padding: 18px 22px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin-top: 8px; margin-bottom: 16px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <div style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #6d5dfc, #14b8a6); display: flex; align-items: center; justify-content: center; font-weight: 700; color: #ffffff; font-size: 17px; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">
-            {initial}
-          </div>
-          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 15px; font-weight: 600;">
-            <span style="color: #ffffff; font-weight: 700;">{account_id}</span>
-            <span style="color: #8e8e93; font-weight: 400; font-size: 16px; margin: 0 2px;">›</span>
-            {tag_html}
-          </div>
-        </div>
-        <span style="color: #8e8e93; font-size: 13px; font-weight: 500;">{timestamp}</span>
-      </div>
-      <div style="font-size: 15px; line-height: 1.55; color: #ececec; margin-bottom: 16px; word-break: break-word;">
-        {formatted_content}
-      </div>
-      <div style="display: flex; align-items: center; gap: 24px; color: #8e8e93; font-size: 18px; padding-top: 10px; border-top: 1px solid #1e1e1e;">
-        <span style="cursor: pointer;" title="Like">♡</span>
-        <span style="cursor: pointer;" title="Reply">💬</span>
-        <span style="cursor: pointer;" title="Repost">⇄</span>
-        <span style="cursor: pointer;" title="Share">✈</span>
-      </div>
-    </div>
-    """
-    st.markdown(card_html, unsafe_allow_html=True)
+    card_html = (
+        f'<div style="background-color: #101010; color: #f5f5f5; border: 1px solid #2a2a2a; border-radius: 16px; padding: 18px 22px; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; margin-top: 8px; margin-bottom: 16px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);">'
+        f'<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">'
+        f'<div style="display: flex; align-items: center; gap: 10px;">'
+        f'<div style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #6d5dfc, #14b8a6); display: flex; align-items: center; justify-content: center; font-weight: 700; color: #ffffff; font-size: 17px; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">'
+        f'{initial}'
+        f'</div>'
+        f'<div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 15px; font-weight: 600;">'
+        f'<span style="color: #ffffff; font-weight: 700;">{account_id}</span>'
+        f'<span style="color: #8e8e93; font-weight: 400; font-size: 16px; margin: 0 2px;">›</span>'
+        f'{tag_html}'
+        f'</div>'
+        f'</div>'
+        f'<span style="color: #8e8e93; font-size: 13px; font-weight: 500;">{timestamp}</span>'
+        f'</div>'
+        f'<div style="font-size: 15px; line-height: 1.55; color: #ececec; margin-bottom: 16px; word-break: break-word;">'
+        f'{formatted_content}'
+        f'</div>'
+        f'<div style="display: flex; align-items: center; gap: 24px; color: #8e8e93; font-size: 18px; padding-top: 10px; border-top: 1px solid #1e1e1e;">'
+        f'<span style="cursor: pointer;" title="Like">♡</span>'
+        f'<span style="cursor: pointer;" title="Reply">💬</span>'
+        f'<span style="cursor: pointer;" title="Repost">⇄</span>'
+        f'<span style="cursor: pointer;" title="Share">✈</span>'
+        f'</div>'
+        f'</div>'
+    )
+    if hasattr(st, "html"):
+        st.html(card_html)
+    else:
+        st.markdown(card_html, unsafe_allow_html=True)
 
 
 def _render_social_connections(catalog: dict[str, tuple[Path, object]]) -> None:
