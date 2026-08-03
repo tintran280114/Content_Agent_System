@@ -1,4 +1,5 @@
 -r requirements-ai.txt
 markdown-it-py>=4,<5
 cryptography>=45,<47
-streamlit==1.59.2
+streamlit>=1.30.0
+requests
