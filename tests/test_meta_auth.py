@@ -145,10 +145,26 @@ class MetaAuthTests(unittest.TestCase):
 
         self.assertEqual((token, user_id, expires_in), ("long", "987", 5_184_000))
         self.assertNotIn("secret", client.post_calls[0]["url"])
+        self.assertNotIn("params", client.post_calls[0])
         self.assertEqual(
-            client.get_calls[0]["headers"]["Authorization"],
-            "Bearer short",
+            client.post_calls[0]["data"],
+            {
+                "client_id": "app",
+                "client_secret": "secret",
+                "code": "code",
+                "grant_type": "authorization_code",
+                "redirect_uri": "http://localhost:8501",
+            },
         )
+        self.assertEqual(
+            client.get_calls[0]["params"],
+            {
+                "grant_type": "th_exchange_token",
+                "client_secret": "secret",
+                "access_token": "short",
+            },
+        )
+        self.assertNotIn("Authorization", client.get_calls[0]["headers"])
 
     def test_authorization_url_has_scopes_state_and_no_secret(self) -> None:
         url = build_threads_authorization_url(

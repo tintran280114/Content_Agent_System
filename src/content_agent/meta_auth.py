@@ -426,10 +426,7 @@ class ThreadsOAuthClient:
             params={
                 "grant_type": "th_exchange_token",
                 "client_secret": values["app_secret"],
-            },
-            headers={
-                "Authorization": f"Bearer {short_token}",
-                "Accept": "application/json",
+                "access_token": short_token,
             },
         )
         long_token = str(long_payload.get("access_token", "")).strip()
@@ -456,7 +453,7 @@ class ThreadsOAuthClient:
             if method == "POST":
                 response = self.client.post(
                     url,
-                    params=params,
+                    data=params,
                     headers=headers or {"Accept": "application/json"},
                     timeout=self.timeout_seconds,
                 )
