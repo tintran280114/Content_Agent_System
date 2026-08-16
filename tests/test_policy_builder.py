@@ -47,7 +47,8 @@ class PolicyBuilderTests(unittest.TestCase):
         self.assertEqual(policy.required_hashtags, ["#ResponsibleAI"])
         self.assertEqual(policy.model_route["research"], "gemini")
         self.assertEqual(policy.model_route["copywriter"], "groq")
-        self.assertEqual(policy.model_route["critic"], "github_models")
+        self.assertEqual(policy.model_route["critic"], "groq")
+        self.assertEqual(policy.model_overrides["critic"], "openai/gpt-oss-20b")
         self.assertTrue(policy.publishing.approval_required)
 
     def test_threads_builder_includes_topic_selection_and_secret_reference(self) -> None:
@@ -72,6 +73,19 @@ class PolicyBuilderTests(unittest.TestCase):
             policy.publishing.credential_ref,
             "THREADS_VIETNAM_AI_TOKEN",
         )
+
+    def test_linkedin_builder_renders_a_personal_publisher_route(self) -> None:
+        markdown = render_policy_markdown(
+            builder_values(
+                platform="LinkedIn",
+                adapter="linkedin",
+                target_id="urn:li:person:123456789",
+                credential_ref="LINKEDIN_VIETNAM_AI_TOKEN",
+            )
+        )
+        policy = parse_policy_text(markdown, source="linkedin-generated.md")
+        self.assertEqual(policy.publishing.adapter, "linkedin")
+        self.assertEqual(policy.publishing.target_id, "urn:li:person:123456789")
 
     def test_builder_saves_atomically_and_requires_explicit_overwrite(self) -> None:
         markdown = render_policy_markdown(builder_values())

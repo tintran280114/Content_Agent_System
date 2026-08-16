@@ -123,7 +123,7 @@ class CompleteUserJourneyTests(unittest.TestCase):
             providers = {
                 Role.RESEARCH: JourneyProvider("gemini", research),
                 Role.COPYWRITER: JourneyProvider("groq", draft),
-                Role.CRITIC: JourneyProvider("github_models", critic),
+                Role.CRITIC: JourneyProvider("groq", critic),
             }
             request = ContentRequest.from_inputs(
                 topic="Kiểm duyệt nội dung AI trước khi đăng",

@@ -40,7 +40,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("Default: full", completed.stdout)
         self.assertIn("artifacts/content_agent.sqlite3", completed.stdout.replace("\\", "/"))
 
-    def test_list_accounts_validates_all_three_policies(self) -> None:
+    def test_list_accounts_validates_all_bundled_policies(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(RUN), "--list-accounts"],
             cwd=ROOT,
@@ -50,7 +50,7 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         lines = [line for line in completed.stdout.splitlines() if line.strip()]
-        self.assertEqual(len(lines), 3)
+        self.assertEqual(len(lines), 4)
         self.assertTrue(any("responsible-ai-lab" in line for line in lines))
         self.assertTrue(any("credential_ref=THREADS_RESPONSIBLE_AI_TOKEN" in line for line in lines))
         self.assertTrue(any("credential_present=" in line for line in lines))

@@ -54,7 +54,7 @@ _FIELD_TO_SECTION = {
 class PublishingConfig(StrictModel):
     """Non-secret delivery settings controlled by an account policy."""
 
-    adapter: Literal["mock", "facebook_page", "threads"] = "mock"
+    adapter: Literal["mock", "facebook_page", "threads", "linkedin"] = "mock"
     target_id: str | None = Field(
         default=None,
         min_length=1,
@@ -203,8 +203,6 @@ class AccountPolicy(StrictModel):
             )
         if any(not model.strip() for model in self.model_overrides.values()):
             raise ValueError("model override values must not be empty")
-        if self.model_route["copywriter"].casefold() == self.model_route["critic"].casefold():
-            raise ValueError("copywriter and critic must use different providers")
         return self
 
 

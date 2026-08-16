@@ -59,7 +59,7 @@ class ConnectivityTests(unittest.TestCase):
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
             result = probe_role_connection(
                 Role.CRITIC,
-                env={"GITHUB_MODELS_TOKEN": "invalid"},
+                env={"GROQ_API_KEY": "invalid"},
                 client=client,
             )
 

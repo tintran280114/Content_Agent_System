@@ -8,11 +8,14 @@ from uuid import uuid4
 
 import _bootstrap  # noqa: F401
 from content_agent.ai.models import DraftPost, GenerationMetadata, TokenUsage
+from content_agent.critics import render_post
 from content_agent.platform import SQLiteRunStore
 from content_agent.policy import parse_policy_text
 from content_agent.publisher import (
     FacebookPagePublisher,
+    LinkedInPublisher,
     MockPublisher,
+    PolicyPublisherRouter,
     PublishError,
     ThreadsPublisher,
 )
@@ -130,9 +133,10 @@ English
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, payload: dict) -> None:
+    def __init__(self, status_code: int, payload: dict, *, headers: dict | None = None) -> None:
         self.status_code = status_code
         self.payload = payload
+        self.headers = headers or {}
 
     def json(self) -> dict:
         return self.payload
@@ -150,11 +154,12 @@ class FakeClient:
         self.get_responses = list(get_responses or [])
         self.get_calls: list[dict] = []
 
-    def post(self, url: str, *, data, headers, timeout: float) -> FakeResponse:
+    def post(self, url: str, *, data=None, json=None, headers, timeout: float) -> FakeResponse:
         self.calls.append(
             {
                 "url": url,
-                "data": dict(data),
+                "data": dict(data) if data is not None else None,
+                "json": dict(json) if json is not None else None,
                 "headers": dict(headers),
                 "timeout": timeout,
             }
@@ -236,7 +241,10 @@ class PublisherTests(unittest.TestCase):
             credential_ref="FACEBOOK_TEST_TOKEN",
             target_id="123456789",
         )
-        client = FakeClient([FakeResponse(200, {"id": "123456789_42"})])
+        client = FakeClient(
+            [FakeResponse(200, {"id": "123456789_42"})],
+            get_responses=[FakeResponse(200, {"id": "123456789", "name": "Test Page"})],
+        )
         publisher = FacebookPagePublisher(
             self.store,
             mode="live",
@@ -281,6 +289,29 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(client.calls, [])
         self.assertEqual(self.store.get_workflow(run_id)["state"], "dry_run")
 
+    def test_facebook_live_rejects_a_user_token_before_posting(self) -> None:
+        run_id, _ = self.create_publishable_run(
+            adapter="facebook_page",
+            credential_ref="FACEBOOK_TEST_TOKEN",
+            target_id="123456789",
+        )
+        client = FakeClient(
+            [],
+            get_responses=[FakeResponse(200, {"id": "999999999", "name": "Test User"})],
+        )
+
+        with self.assertRaises(PublishError) as caught:
+            FacebookPagePublisher(
+                self.store,
+                mode="live",
+                client=client,
+                env={"FACEBOOK_TEST_TOKEN": "user-token"},
+            ).publish(run_id)
+
+        self.assertEqual(caught.exception.code, "facebook_page_token_required")
+        self.assertEqual(client.calls, [])
+        self.assertNotIn("user-token", str(caught.exception))
+
     def test_facebook_live_can_follow_an_idempotent_dry_run(self) -> None:
         run_id, _ = self.create_publishable_run(
             adapter="facebook_page",
@@ -297,7 +328,10 @@ class PublisherTests(unittest.TestCase):
 
         dry_receipt = dry_publisher.publish(run_id)
         repeated_dry_receipt = dry_publisher.publish(run_id)
-        live_client = FakeClient([FakeResponse(200, {"id": "123456789_44"})])
+        live_client = FakeClient(
+            [FakeResponse(200, {"id": "123456789_44"})],
+            get_responses=[FakeResponse(200, {"id": "123456789", "name": "Test Page"})],
+        )
         live_receipt = FacebookPagePublisher(
             self.store,
             mode="live",
@@ -480,6 +514,117 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(client.calls, [])
         self.assertEqual(client.get_calls, [])
 
+    def test_linkedin_dry_run_needs_no_secret_and_makes_no_request(self) -> None:
+        run_id, _ = self.create_publishable_run(
+            adapter="linkedin",
+            credential_ref="LINKEDIN_MISSING_TOKEN",
+            target_id="urn:li:person:123456789",
+        )
+        client = FakeClient([])
+
+        receipt = LinkedInPublisher(
+            self.store,
+            mode="dry-run",
+            client=client,
+            env={},
+        ).publish(run_id)
+
+        self.assertEqual(receipt.status, PublishStatus.DRY_RUN)
+        self.assertEqual(client.calls, [])
+
+    def test_linkedin_live_posts_json_retries_and_is_idempotent(self) -> None:
+        run_id, draft = self.create_publishable_run(
+            adapter="linkedin",
+            credential_ref="LINKEDIN_TEST_TOKEN",
+            target_id="urn:li:person:123456789",
+        )
+        sleeps: list[float] = []
+        client = FakeClient(
+            [
+                FakeResponse(429, {"message": "hidden"}),
+                FakeResponse(
+                    201,
+                    {},
+                    headers={"x-restli-id": "urn:li:share:987654321"},
+                ),
+            ]
+        )
+        publisher = LinkedInPublisher(
+            self.store,
+            mode="live",
+            client=client,
+            env={
+                "LINKEDIN_TEST_TOKEN": "linkedin-private-token",
+            },
+            base_backoff_seconds=0.25,
+            sleeper=sleeps.append,
+        )
+
+        receipt = publisher.publish(run_id)
+        repeated = publisher.publish(run_id)
+
+        self.assertEqual(receipt.publish_id, repeated.publish_id)
+        self.assertEqual(receipt.remote_post_id, "urn:li:share:987654321")
+        self.assertEqual(receipt.attempt_count, 2)
+        self.assertEqual(sleeps, [0.25])
+        self.assertEqual(len(client.calls), 2)
+        call = client.calls[1]
+        self.assertEqual(call["url"], "https://api.linkedin.com/rest/posts")
+        self.assertEqual(call["headers"]["Authorization"], "Bearer linkedin-private-token")
+        self.assertEqual(call["headers"]["X-Restli-Protocol-Version"], "2.0.0")
+        self.assertEqual(call["headers"]["Linkedin-Version"], "202604")
+        self.assertEqual(call["json"]["author"], "urn:li:person:123456789")
+        self.assertEqual(call["json"]["commentary"], render_post(draft))
+        self.assertEqual(call["json"]["visibility"], "PUBLIC")
+        self.assertEqual(call["json"]["distribution"]["feedDistribution"], "MAIN_FEED")
+        self.assertEqual(call["json"]["distribution"]["targetEntities"], [])
+        self.assertEqual(call["json"]["distribution"]["thirdPartyDistributionChannels"], [])
+        self.assertFalse(call["json"]["isReshareDisabledByAuthor"])
+        self.assertNotIn("linkedin-private-token", str(call["json"]))
+
+    def test_router_selects_linkedin_and_keeps_auth_error_safe(self) -> None:
+        run_id, _ = self.create_publishable_run(
+            adapter="linkedin",
+            credential_ref="LINKEDIN_TEST_TOKEN",
+            target_id="urn:li:person:123456789",
+        )
+        client = FakeClient([FakeResponse(401, {"message": "secret details"})])
+
+        with self.assertRaises(PublishError) as caught:
+            PolicyPublisherRouter(
+                self.store,
+                mode="live",
+                client=client,
+                env={"LINKEDIN_TEST_TOKEN": "linkedin-private-token"},
+                sleeper=lambda _: None,
+            ).publish(run_id)
+
+        self.assertEqual(caught.exception.code, "publish_authentication")
+        self.assertNotIn("linkedin-private-token", str(caught.exception))
+        self.assertNotIn("secret details", str(caught.exception))
+        self.assertEqual(self.store.get_publish_attempts(run_id)[0]["status"], "failed")
+
+    def test_linkedin_posts_access_denial_explains_oauth_is_not_the_fix(self) -> None:
+        run_id, _ = self.create_publishable_run(
+            adapter="linkedin",
+            credential_ref="LINKEDIN_TEST_TOKEN",
+            target_id="urn:li:person:123456789",
+        )
+        with self.assertRaises(PublishError) as caught:
+            LinkedInPublisher(
+                self.store,
+                mode="live",
+                client=FakeClient([FakeResponse(403, {"message": "raw provider details"})]),
+                env={"LINKEDIN_TEST_TOKEN": "linkedin-private-token"},
+                sleeper=lambda _: None,
+            ).publish(run_id)
+
+        self.assertEqual(caught.exception.code, "linkedin_posts_api_access_denied")
+        self.assertIn("OAuth connected successfully", str(caught.exception))
+        self.assertIn("w_member_social", str(caught.exception))
+        self.assertNotIn("linkedin-private-token", str(caught.exception))
+        self.assertNotIn("raw provider details", str(caught.exception))
+
     def test_rate_limit_retries_without_consuming_content_rewrite_budget(self) -> None:
         run_id, _ = self.create_publishable_run(
             adapter="facebook_page",
@@ -491,7 +636,8 @@ class PublisherTests(unittest.TestCase):
             [
                 FakeResponse(429, {"error": {"message": "hidden"}}),
                 FakeResponse(200, {"id": "123456789_43"}),
-            ]
+            ],
+            get_responses=[FakeResponse(200, {"id": "123456789", "name": "Test Page"})],
         )
         receipt = FacebookPagePublisher(
             self.store,
@@ -536,7 +682,10 @@ class PublisherTests(unittest.TestCase):
         publisher = FacebookPagePublisher(
             self.store,
             mode="live",
-            client=FakeClient([FakeResponse(401, {"error": {"message": "secret details"}})]),
+            client=FakeClient(
+                [],
+                get_responses=[FakeResponse(401, {"error": {"message": "secret details"}})],
+            ),
             env={"FACEBOOK_TEST_TOKEN": "expired-private-token"},
             sleeper=lambda _: None,
         )
@@ -551,6 +700,41 @@ class PublisherTests(unittest.TestCase):
         attempt = self.store.get_publish_attempts(run_id)[0]
         self.assertEqual(attempt["status"], "failed")
         self.assertEqual(attempt["http_status"], 401)
+
+    def test_meta_parameter_error_keeps_numeric_diagnostics_without_body(self) -> None:
+        run_id, _ = self.create_publishable_run(
+            adapter="facebook_page",
+            credential_ref="FACEBOOK_TEST_TOKEN",
+            target_id="123456789",
+        )
+        publisher = FacebookPagePublisher(
+            self.store,
+            mode="live",
+            client=FakeClient(
+                [
+                    FakeResponse(
+                        400,
+                        {
+                            "error": {
+                                "message": "raw provider detail must not be exposed",
+                                "code": 100,
+                                "error_subcode": 42,
+                            }
+                        },
+                    )
+                ],
+                get_responses=[FakeResponse(200, {"id": "123456789", "name": "Test Page"})],
+            ),
+            env={"FACEBOOK_TEST_TOKEN": "private-token"},
+            sleeper=lambda _: None,
+        )
+
+        with self.assertRaises(PublishError) as caught:
+            publisher.publish(run_id)
+
+        self.assertIn("publishing parameter", str(caught.exception))
+        self.assertIn("Meta code 100, subcode 42", str(caught.exception))
+        self.assertNotIn("raw provider detail", str(caught.exception))
 
 
     def test_mock_publisher_validates_and_publishes(self) -> None:

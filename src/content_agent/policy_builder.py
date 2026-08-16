@@ -76,8 +76,8 @@ class PolicyBuilderInput(StrictModel):
         )
         if total != 100:
             raise ValueError(f"rubric weights must total 100, currently {total}")
-        if self.adapter not in {"mock", "facebook_page", "threads"}:
-            raise ValueError("adapter must be mock, facebook_page, or threads")
+        if self.adapter not in {"mock", "facebook_page", "threads", "linkedin"}:
+            raise ValueError("adapter must be mock, facebook_page, threads, or linkedin")
         if self.adapter != "threads" and (self.topic_tag or self.topic_tag_candidates or self.trend_search):
             raise ValueError("topic/community tag settings are available only for Threads")
         return self
@@ -156,7 +156,7 @@ def render_policy_markdown(values: PolicyBuilderInput) -> str:
         "## Model Route",
         "- research: gemini@gemini-3.1-flash-lite",
         "- copywriter: groq@openai/gpt-oss-120b",
-        "- critic: github_models@openai/gpt-4o-mini",
+        "- critic: groq@openai/gpt-oss-20b",
         "",
         "## Publishing",
         *publishing,

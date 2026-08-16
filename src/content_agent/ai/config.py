@@ -56,11 +56,12 @@ DEFAULT_ROUTES: dict[Role, ModelRoute] = {
     ),
     Role.CRITIC: ModelRoute(
         role=Role.CRITIC,
-        provider="github_models",
-        credential_env="GITHUB_MODELS_TOKEN",
-        model_env="GITHUB_MODELS_MODEL",
-        primary_model="openai/gpt-4o-mini",
-        fallback_models=("openai/gpt-4.1-mini",),
-        free_tier_note="GitHub Models free, rate-limited prototyping tier.",
+        provider="groq",
+        credential_env="GROQ_API_KEY",
+        model_env="GROQ_CRITIC_MODEL",
+        primary_model="openai/gpt-oss-20b",
+        fallback_models=("qwen/qwen3.6-27b",),
+        free_tier_note="Groq Free Plan, subject to the organization Limits page.",
+        lifecycle_note="Migrated from GitHub Models during its 2026 retirement brownout.",
     ),
 }

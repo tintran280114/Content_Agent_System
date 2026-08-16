@@ -23,10 +23,13 @@ def create_role_provider(
     normalized_role = role if isinstance(role, Role) else Role(role)
     default_route = DEFAULT_ROUTES[normalized_role]
     provider_name = (provider or default_route.provider).strip().casefold()
-    try:
-        route = PROVIDER_ROUTES[provider_name]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported provider: {provider_name}") from exc
+    if provider_name == default_route.provider:
+        route = default_route
+    else:
+        try:
+            route = PROVIDER_ROUTES[provider_name]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported provider: {provider_name}") from exc
     source = os.environ if env is None else env
 
     if model is not None and fallback_index is not None:

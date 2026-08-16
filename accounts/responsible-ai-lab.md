@@ -52,11 +52,11 @@ English
 ## Model Route
 - research: gemini@gemini-3.1-flash-lite
 - copywriter: groq@openai/gpt-oss-120b
-- critic: github_models@openai/gpt-4o-mini
+- critic: groq@openai/gpt-oss-20b
 
 ## Publishing
 - adapter: threads
-- target_id: 27929250196705793
+- target_id: 27805780262367716
 - credential_ref: THREADS_RESPONSIBLE_AI_TOKEN
 - approval_required: true
 - topic_tag: Responsible AI

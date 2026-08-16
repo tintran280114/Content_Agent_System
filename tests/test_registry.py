@@ -8,10 +8,12 @@ from content_agent.ai.registry import create_role_provider
 
 
 class RegistryTests(unittest.TestCase):
-    def test_copywriter_and_critic_are_separate_providers(self) -> None:
+    def test_copywriter_and_critic_use_distinct_models(self) -> None:
+        self.assertEqual(DEFAULT_ROUTES[Role.COPYWRITER].provider, "groq")
+        self.assertEqual(DEFAULT_ROUTES[Role.CRITIC].provider, "groq")
         self.assertNotEqual(
-            DEFAULT_ROUTES[Role.COPYWRITER].provider,
-            DEFAULT_ROUTES[Role.CRITIC].provider,
+            DEFAULT_ROUTES[Role.COPYWRITER].primary_model,
+            DEFAULT_ROUTES[Role.CRITIC].primary_model,
         )
 
     def test_copywriter_default_avoids_announced_groq_shutdown(self) -> None:
@@ -30,8 +32,8 @@ class RegistryTests(unittest.TestCase):
     def test_environment_can_override_primary_model(self) -> None:
         route = DEFAULT_ROUTES[Role.CRITIC]
         self.assertEqual(
-            route.selected_model({"GITHUB_MODELS_MODEL": "openai/custom"}),
-            "openai/custom",
+            route.selected_model({"GROQ_CRITIC_MODEL": "qwen/custom"}),
+            "qwen/custom",
         )
 
     def test_policy_can_select_provider_and_model_without_code_change(self) -> None:

@@ -10,11 +10,12 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
 from .critics import render_post
+from .linkedin_auth import LinkedInAuthError, LinkedInTokenManager
 from .meta_auth import EncryptedTokenStore, MetaAuthError, ThreadsTokenManager
 from .platform import SQLiteRunStore
 from .policy import AccountPolicy
@@ -98,6 +99,24 @@ class ThreadsCredentialResolver:
                 retryable=exc.code == "threads_refresh_connection",
                 status_code=exc.status_code,
             ) from exc
+
+
+class LinkedInCredentialResolver:
+    """Resolve LinkedIn tokens from environment or encrypted storage."""
+
+    def __init__(self, env: Mapping[str, str] | None = None) -> None:
+        self.env = os.environ if env is None else env
+        self.manager = LinkedInTokenManager.from_env(self.env, base_dir=Path.cwd())
+
+    def resolve(self, credential_ref: str) -> str:
+        try:
+            return self.manager.resolve(credential_ref)
+        except LinkedInAuthError as exc:
+            code = {
+                "missing_linkedin_token": "missing_publish_credential",
+                "linkedin_token_expired": "publish_authentication",
+            }.get(exc.code, exc.code)
+            raise PublishError(code, str(exc), status_code=exc.status_code) from exc
 
 
 class HttpClient(Protocol):
@@ -282,6 +301,33 @@ class _MetaPublisher(_GuardedPublisher):
             )
         return version
 
+    @staticmethod
+    def _meta_error_message(response: Any, status_code: int) -> str:
+        """Return safe numeric Meta diagnostics without retaining a response body."""
+
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            payload = {}
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            return f"Meta API request failed with HTTP {status_code}."
+        code = error.get("code")
+        subcode = error.get("error_subcode")
+        suffix = ""
+        if isinstance(code, int):
+            suffix = f" (Meta code {code}"
+            if isinstance(subcode, int):
+                suffix += f", subcode {subcode}"
+            suffix += ")"
+        if code == 190:
+            return "Meta rejected the access token; reconnect the platform account." + suffix
+        if code in {10, 200}:
+            return "Meta rejected the required app permission or app access level." + suffix
+        if code == 100:
+            return "Meta rejected a publishing parameter or post payload." + suffix
+        return f"Meta API request failed with HTTP {status_code}." + suffix
+
     def _prepare(
         self,
         run_id: UUID | str,
@@ -391,11 +437,7 @@ class _MetaPublisher(_GuardedPublisher):
             retryable = last_status == 429 or last_status >= 500
             if not retryable or attempt >= self.max_attempts:
                 code = "publish_authentication" if last_status in {401, 403} else "meta_api_error"
-                message = (
-                    "Meta rejected the publishing credential or required permission."
-                    if last_status in {401, 403}
-                    else f"Meta API request failed with HTTP {last_status}."
-                )
+                message = self._meta_error_message(response, last_status)
                 raise PublishError(
                     code,
                     message,
@@ -459,11 +501,7 @@ class _MetaPublisher(_GuardedPublisher):
             retryable = last_status == 429 or last_status >= 500
             if not retryable or attempt >= self.max_attempts:
                 code = "publish_authentication" if last_status in {401, 403} else "meta_api_error"
-                message = (
-                    "Meta rejected the publishing credential or required permission."
-                    if last_status in {401, 403}
-                    else f"Meta API request failed with HTTP {last_status}."
-                )
+                message = self._meta_error_message(response, last_status)
                 raise PublishError(
                     code,
                     message,
@@ -548,6 +586,20 @@ class FacebookPagePublisher(_MetaPublisher):
         attempt_count = 0
         try:
             token = self.credential_resolver.resolve(str(policy.publishing.credential_ref))
+            identity, _, _ = self._get(
+                f"{self.graph_host}/{self._version()}/me",
+                params={"fields": "id,name"},
+                token=token,
+            )
+            token_owner = str(identity.get("id", "")).strip()
+            target_id = str(policy.publishing.target_id)
+            if token_owner != target_id:
+                raise PublishError(
+                    "facebook_page_token_required",
+                    "Facebook requires a Page Access Token for the selected Page; "
+                    "the configured token belongs to a user or another Page.",
+                    status_code=403,
+                )
             url = f"{self.graph_host}/{self._version()}/{policy.publishing.target_id}/feed"
             payload, status_code, attempt_count = self._post(
                 url,
@@ -771,6 +823,220 @@ class ThreadsPublisher(_MetaPublisher):
         return receipt
 
 
+class LinkedInPublisher(_MetaPublisher):
+    """Publish a text-only post using LinkedIn's self-serve Share product."""
+
+    adapter = "linkedin"
+    graph_host = "https://api.linkedin.com"
+
+    def __init__(
+        self,
+        store: SQLiteRunStore,
+        *,
+        mode: PublishMode,
+        credential_resolver: CredentialResolver | None = None,
+        client: HttpClient | None = None,
+        env: Mapping[str, str] | None = None,
+        max_attempts: int = 3,
+        base_backoff_seconds: float = 1.0,
+        sleeper: SleepFunction = time.sleep,
+    ) -> None:
+        _GuardedPublisher.__init__(self, store)
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        self.mode = mode
+        self.env = os.environ if env is None else env
+        self.credential_resolver = credential_resolver or LinkedInCredentialResolver(self.env)
+        self.client = client or httpx.Client(
+            limits=httpx.Limits(max_keepalive_connections=5, keepalive_expiry=30.0)
+        )
+        self.max_attempts = max_attempts
+        self.base_backoff_seconds = max(0.0, base_backoff_seconds)
+        self.sleeper = sleeper
+        raw_timeout = self.env.get("LINKEDIN_REQUEST_TIMEOUT_SECONDS", "").strip() or "30"
+        try:
+            self.request_timeout_seconds = float(raw_timeout)
+        except ValueError as exc:
+            raise PublishError(
+                "invalid_linkedin_timeout",
+                "LINKEDIN_REQUEST_TIMEOUT_SECONDS must be a number.",
+            ) from exc
+        if not 5 <= self.request_timeout_seconds <= 120:
+            raise PublishError(
+                "invalid_linkedin_timeout",
+                "LINKEDIN_REQUEST_TIMEOUT_SECONDS must be between 5 and 120 seconds.",
+            )
+        # The Posts API requires a YYYYMM release header.  Keep a current,
+        # documented default while allowing deployments to pin a release.
+        self.api_version = self.env.get("LINKEDIN_API_VERSION", "").strip() or "202604"
+        if not re.fullmatch(r"20\d{4}", self.api_version):
+            raise PublishError(
+                "invalid_linkedin_api_version",
+                "LINKEDIN_API_VERSION must use the YYYYMM format.",
+            )
+
+    @staticmethod
+    def _api_error_diagnostic(response: Any, *, include_validation_message: bool = False) -> str:
+        """Return bounded LinkedIn diagnostics without response text or credentials."""
+        values: list[str] = []
+        try:
+            body = response.json()
+            if isinstance(body, Mapping):
+                for key in ("code", "serviceErrorCode", "status"):
+                    value = str(body.get(key, "")).strip()
+                    if value and value not in values:
+                        values.append(value)
+                if include_validation_message:
+                    message = " ".join(str(body.get("message", "")).split()).strip()
+                    # LinkedIn's validation message describes a field or shape;
+                    # bound it so an upstream response can never expose a
+                    # request body or credential through our UI.
+                    if message:
+                        values.append(f"validation {message[:180]}")
+        except (ValueError, AttributeError, TypeError):
+            pass
+        request_id = str(response.headers.get("x-li-request-id", "")).strip()
+        if request_id:
+            values.append(f"request {request_id}")
+        return f" LinkedIn diagnostic: {', '.join(values)}." if values else ""
+
+    def _post_json(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        token: str,
+    ) -> tuple[str, int, int]:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Restli-Protocol-Version": "2.0.0",
+            "Linkedin-Version": self.api_version,
+        }
+        last_status: int | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = self.client.post(
+                    f"{self.graph_host}/rest/posts",
+                    json=payload,
+                    headers=headers,
+                    timeout=self.request_timeout_seconds,
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt >= self.max_attempts:
+                    raise PublishError(
+                        "publish_connection_error",
+                        "LinkedIn API could not be reached after bounded retries.",
+                        retryable=True,
+                    ) from exc
+                self.sleeper(self.base_backoff_seconds * (2 ** (attempt - 1)))
+                continue
+            last_status = int(response.status_code)
+            if last_status < 400:
+                remote_post_id = str(response.headers.get("x-restli-id", "")).strip()
+                if not remote_post_id:
+                    raise PublishError(
+                        "invalid_publish_response",
+                        "LinkedIn API response did not contain a post id.",
+                        status_code=last_status,
+                    )
+                return remote_post_id, last_status, attempt
+            retryable = last_status == 429 or last_status >= 500
+            if not retryable or attempt >= self.max_attempts:
+                if last_status == 401:
+                    code = "publish_authentication"
+                    message = "LinkedIn rejected the access token. Reconnect the LinkedIn account."
+                elif last_status == 403:
+                    # A successful OAuth code exchange only proves the user
+                    # granted consent.  LinkedIn can still deny the app/token
+                    # access to the current Posts API product.  Make that
+                    # distinction explicit so operators do not keep retrying
+                    # the one-time OAuth code.
+                    code = "linkedin_posts_api_access_denied"
+                    message = (
+                        "LinkedIn denied Posts API access for this app/token. "
+                        "OAuth connected successfully, but this is not a token-expiry error. "
+                        "Verify the app's Share on LinkedIn entitlement and `w_member_social` "
+                        "scope with LinkedIn before retrying live publishing."
+                    )
+                else:
+                    code = "linkedin_api_error"
+                    message = f"LinkedIn API request failed with HTTP {last_status}."
+                message += self._api_error_diagnostic(
+                    response,
+                    include_validation_message=last_status == 422,
+                )
+                raise PublishError(
+                    code,
+                    message,
+                    retryable=retryable,
+                    status_code=last_status,
+                )
+            self.sleeper(self.base_backoff_seconds * (2 ** (attempt - 1)))
+        raise PublishError(
+            "linkedin_api_error",
+            f"LinkedIn API request failed with HTTP {last_status}.",
+            retryable=True,
+            status_code=last_status,
+        )
+
+    def publish(self, run_id: UUID | str) -> PublishReceipt:
+        _, draft, policy, key, existing = self._prepare(run_id)
+        if existing:
+            return existing
+        destination = f"{self.adapter}:{policy.publishing.target_id}"
+        pending = self._reserve(
+            run_id,
+            draft_id=draft.draft_id,
+            destination=destination,
+            idempotency_key=key,
+        )
+        if self.mode == "dry-run":
+            return self._dry_run(run_id, pending=pending)
+        attempt_count = 0
+        try:
+            if "REPLACE_WITH" in str(policy.publishing.target_id):
+                raise PublishError(
+                    "invalid_linkedin_person_urn",
+                    "Replace the sample LinkedIn Person URN in the account policy before live publishing.",
+                )
+            token = self.credential_resolver.resolve(str(policy.publishing.credential_ref))
+            remote_post_id, status_code, attempt_count = self._post_json(
+                payload={
+                    "author": str(policy.publishing.target_id),
+                    "commentary": render_post(draft),
+                    "visibility": "PUBLIC",
+                    "distribution": {
+                        "feedDistribution": "MAIN_FEED",
+                        "targetEntities": [],
+                        "thirdPartyDistributionChannels": [],
+                    },
+                    "lifecycleState": "PUBLISHED",
+                    "isReshareDisabledByAuthor": False,
+                },
+                token=token,
+            )
+        except PublishError as exc:
+            self._failed(pending, exc, attempt_count=max(attempt_count, 1))
+            raise
+        receipt = pending.model_copy(
+            update={
+                "status": PublishStatus.PUBLISHED,
+                "remote_post_id": remote_post_id,
+                "http_status": status_code,
+                "attempt_count": attempt_count,
+                "reason": "LinkedIn personal text post published successfully.",
+            }
+        )
+        self.store.update_publish_attempt(receipt=receipt)
+        self._set_workflow_state(
+            run_id,
+            state=WorkflowState.PUBLISHED,
+            draft_id=draft.draft_id,
+        )
+        return receipt
+
+
 class PolicyPublisherRouter:
     """Select a publisher from the persisted account policy."""
 
@@ -804,6 +1070,7 @@ class PolicyPublisherRouter:
         publisher_class = {
             "facebook_page": FacebookPagePublisher,
             "threads": ThreadsPublisher,
+            "linkedin": LinkedInPublisher,
         }[policy.publishing.adapter]
         publisher = publisher_class(
             self.store,

@@ -20,6 +20,12 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class StreamlitAppTests(unittest.TestCase):
+    def test_post_preview_copy_is_selected_from_the_platform(self) -> None:
+        source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+        self.assertIn('casefold() == "linkedin"', source)
+        self.assertIn("LinkedIn personal post preview", source)
+        self.assertIn("_post_preview_heading(publish_policy.platform)", source)
+
     def test_empty_database_dashboard_renders_without_exception(self) -> None:
         previous = os.environ.get("CONTENT_AGENT_DB")
         try:
@@ -30,7 +36,8 @@ class StreamlitAppTests(unittest.TestCase):
                     default_timeout=15,
                 ).run()
                 self.assertEqual(list(app.exception), [])
-                self.assertEqual(app.title[0].value, "✨ Content Studio")
+                self.assertEqual(app.title[0].value, "Content Operations")
+                self.assertFalse(any(field.label == "Operator" for field in app.text_input))
                 self.assertTrue(any("No runs yet" in info.value for info in app.info))
                 self.assertFalse(any(field.label == "SQLite path" for field in app.text_input))
                 upload_labels = {uploader.label for uploader in app.file_uploader}
@@ -39,14 +46,14 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertIn("Upload content Markdown *", upload_labels)
                 self.assertNotIn("Hoặc upload nội dung gốc (.md/.txt)", upload_labels)
                 labels = [tab.label for tab in app.tabs]
-                self.assertIn("1 · Create content", labels)
-                self.assertIn("2 · Review & approve", labels)
-                self.assertIn("3 · Publish", labels)
-                self.assertIn("4 · Accounts & policies", labels)
-                self.assertIn("5 · Analytics", labels)
-                self.assertIn("6 · Help & testing", labels)
-                self.assertTrue(any(button.label == "Kiểm tra 3 kết nối" for button in app.button))
-                self.assertTrue(any(button.label == "Xóa key nhập tay" for button in app.button))
+                self.assertIn("Create", labels)
+                self.assertIn("Review", labels)
+                self.assertIn("Publish", labels)
+                self.assertIn("Channels", labels)
+                self.assertIn("Analytics", labels)
+                self.assertIn("Help", labels)
+                self.assertTrue(any(button.label == "Test AI connections" for button in app.button))
+                self.assertTrue(any(button.label == "Clear session keys" for button in app.button))
                 self.assertFalse(
                     any(control.label == "Bạn muốn bắt đầu từ đâu?" for control in app.segmented_control)
                 )
@@ -54,17 +61,17 @@ class StreamlitAppTests(unittest.TestCase):
                 gemini_key.set_value("manual-session-test")
                 app.run()
                 self.assertEqual(list(app.exception), [])
-                self.assertTrue(any("Đang dùng key nhập tay" in markdown.value for markdown in app.markdown))
-                next(button for button in app.button if button.label == "Xóa key nhập tay").click()
+                self.assertTrue(any("Session key active" in markdown.value for markdown in app.markdown))
+                next(button for button in app.button if button.label == "Clear session keys").click()
                 app.run()
                 self.assertEqual(list(app.exception), [])
-                self.assertTrue(any("key mặc định của hệ thống" in info.value for info in app.info))
+                self.assertTrue(any("system configuration" in info.value for info in app.info))
                 self.assertFalse(any(field.label == "Chủ đề / Topic *" for field in app.text_input))
                 self.assertFalse(
                     any(area.label == "Bạn muốn AI viết bài như thế nào? *" for area in app.text_area)
                 )
                 process_button = next(
-                    button for button in app.button if button.label == "Chạy content Markdown"
+                    button for button in app.button if button.label == "Continue with Markdown"
                 )
                 self.assertTrue(process_button.disabled)
 
@@ -98,9 +105,9 @@ class StreamlitAppTests(unittest.TestCase):
                     update={
                         "account_id": policy.account_id,
                         "draft_id": draft.draft_id,
-                        "score": 60,
-                        "decision": Decision.HUMAN_REVIEW,
-                        "violations": ["Needs a clearer practical step."],
+                        "score": 92,
+                        "decision": Decision.PASS,
+                        "violations": [],
                     }
                 )
                 run_id = uuid4()
@@ -151,30 +158,18 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertEqual(review_select.value, str(run_id))
                 self.assertTrue(any(draft.content in area.value for area in app.text_area))
 
-                approve_actor = next(field for field in app.text_input if field.label == "Operator")
-                approve_actor.set_value("boss@example.com")
                 approve_button = next(
-                    button for button in app.button if button.label == "Approve and move to Publish"
+                    button
+                    for button in app.button
+                    if button.label == "Approve and continue to Publish"
                 )
                 approve_button.click()
                 app.run()
-                self.assertEqual(list(app.exception), [])
-                self.assertTrue(any("Approval failed" in error.value for error in app.error))
-                self.assertEqual(store.get_workflow(run_id)["state"], "human_review")
-
-                approval_note = next(
-                    area for area in app.text_area if area.label == "Approval note (required)"
-                )
-                approval_note.set_value("Reviewed and approved for guarded publishing.")
-                approve_button = next(
-                    button for button in app.button if button.label == "Approve and move to Publish"
-                )
-                approve_button.click()
-                app.run()
-
                 self.assertEqual(list(app.exception), [])
                 self.assertTrue(any("Approved successfully" in success.value for success in app.success))
                 self.assertTrue(any(f"--publish-approved {run_id}" in block.value for block in app.code))
+                publish_select = next(box for box in app.selectbox if box.label == "Approved post")
+                self.assertEqual(publish_select.value, str(run_id))
                 self.assertEqual(store.get_workflow(run_id)["state"], "approved")
                 self.assertEqual(
                     [action["action"] for action in store.get_review_actions(run_id)],

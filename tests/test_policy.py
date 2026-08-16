@@ -12,13 +12,22 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class PolicyTests(unittest.TestCase):
-    def test_three_differentiated_account_policies_parse(self) -> None:
+    def test_differentiated_account_policies_parse(self) -> None:
         paths = sorted(path for path in (ROOT / "accounts").glob("*.md") if path.name != "template.md")
         policies = load_policies(paths)
-        self.assertEqual(len(policies), 3)
-        self.assertEqual(len({policy.account_id for policy in policies}), 3)
-        self.assertEqual(len({policy.platform for policy in policies}), 3)
-        self.assertEqual(len({policy.max_length for policy in policies}), 3)
+        self.assertEqual(len(policies), 4)
+        self.assertEqual(len({policy.account_id for policy in policies}), 4)
+        self.assertEqual(len({policy.platform for policy in policies}), 4)
+        self.assertEqual(len({policy.max_length for policy in policies}), 4)
+
+    def test_linkedin_policy_routes_to_a_non_secret_member_target(self) -> None:
+        policy = load_policy(ROOT / "accounts" / "linkedin-professional.md")
+        self.assertEqual(policy.publishing.adapter, "linkedin")
+        self.assertTrue(policy.publishing.target_id.startswith("urn:li:person:"))
+        self.assertEqual(
+            policy.publishing.credential_ref,
+            "LINKEDIN_EXAMPLE_ACCESS_TOKEN",
+        )
 
     def test_policy_is_compatible_with_ai_handoff(self) -> None:
         policy = load_policy(FIXTURES / "policy_valid.md")
@@ -99,12 +108,12 @@ class PolicyTests(unittest.TestCase):
         self.assertIn("Rubric", str(caught.exception))
         self.assertIn("total 100", str(caught.exception))
 
-    def test_copywriter_and_critic_provider_separation_is_enforced(self) -> None:
+    def test_copywriter_and_critic_can_share_a_provider(self) -> None:
         text = (FIXTURES / "policy_valid.md").read_text(encoding="utf-8")
         text = text.replace("- critic: github_models", "- critic: groq")
-        with self.assertRaises(PolicyParseError) as caught:
-            parse_policy_text(text, source="same-provider.md")
-        self.assertIn("Model Route", str(caught.exception))
+        policy = parse_policy_text(text, source="same-provider.md")
+        self.assertEqual(policy.model_route["copywriter"], "groq")
+        self.assertEqual(policy.model_route["critic"], "groq")
 
 
 if __name__ == "__main__":

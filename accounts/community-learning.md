@@ -52,10 +52,10 @@ English
 ## Model Route
 - research: gemini@gemini-3.1-flash-lite
 - copywriter: groq@openai/gpt-oss-120b
-- critic: github_models@openai/gpt-4o-mini
+- critic: groq@openai/gpt-oss-20b
 
 ## Publishing
 - adapter: facebook_page
-- target_id: 000000000000001
+- target_id: 1262523796940910
 - credential_ref: FACEBOOK_COMMUNITY_PAGE_TOKEN
 - approval_required: true
