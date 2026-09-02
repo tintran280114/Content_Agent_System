@@ -1768,6 +1768,29 @@ with accounts_tab:
         ["Current channels", "Add channel", "Advanced Markdown"], key="channel_tabs"
     )
     with existing_tab:
+        with st.expander("Account setup and removal guide", expanded=False):
+            st.markdown(
+                """
+                **Add an account:** use **Add channel**, complete the publishing configuration,
+                generate the policy, then save it. Store tokens only in local secure configuration
+                or the session-only connection fields—never in the policy file.
+
+                **Replace an account:** save a policy with the same account slug and enable
+                **Replace an existing channel with the same slug**. Update the local credential
+                matching its `credential_ref` before testing live publishing.
+
+                **Pause an account:** change `active: true` to `active: false` in the policy,
+                then upload and replace it from **Advanced Markdown**. It will no longer be
+                selected by future runs, while audit history remains available.
+
+                **Remove an account permanently:** delete `accounts/<account-slug>.md` from the
+                repository and commit that change. This removes it from future channel discovery;
+                historical SQLite records are intentionally retained.
+
+                See `docs/channel_setup_guide_vi.md` in the repository for the complete
+                Vietnamese hand-off guide and platform-specific test steps.
+                """
+            )
         if catalog:
             channel_items = list(catalog.items())
             for offset in range(0, len(channel_items), 3):
